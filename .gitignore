@@ -1,0 +1,11 @@
+node_modules
+dist
+src-tauri/target
+backend/bin
+backend/build
+backend/__pycache__
+backend/src/risk_backend/__pycache__
+backend/src/risk_backend/models/__pycache__
+backend/src/risk_backend/repositories/__pycache__
+backend/src/risk_backend/services/__pycache__
+.runtime_data

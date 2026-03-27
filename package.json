@@ -1,0 +1,32 @@
+{
+  "name": "risk-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:web": "vite --host 0.0.0.0 --port 1420",
+    "dev:backend": "python3 backend/main.py --host 127.0.0.1 --port 38911",
+    "build": "tauri build",
+    "build:sidecar": "python3 backend/build_sidecar.py",
+    "build:web": "vite build",
+    "build:debug:app": "tauri build --debug -b app --no-sign",
+    "build:release:app": "tauri build -b app --no-sign",
+    "build:release:dmg": "tauri build -b dmg --no-sign",
+    "build:release:windows": "tauri build -b nsis",
+    "build:release:windows:msi": "tauri build -b msi",
+    "build:release:full": "./build_release.sh",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.8"
+  }
+}
