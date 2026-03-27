@@ -681,11 +681,7 @@ function App() {
 
       <header className="hero-panel">
         <div>
-          <p className="eyebrow">污染场地风险评估系统</p>
-          <h1>保留原有计算逻辑，重做跨平台桌面工作台</h1>
-          <p className="hero-copy">
-            目录、工作区、参数、结果和污染物库管理都收敛到了同一套界面里。
-          </p>
+          <h1>污染场地风险评估系统</h1>
         </div>
         <div className="hero-actions">
           <button className="ghost-button" onClick={openParameterModal} type="button">
