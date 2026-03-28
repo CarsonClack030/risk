@@ -6,6 +6,8 @@ from risk_backend.models.entities import Pollutant, to_decimal
 from risk_backend.repositories.database import connect
 
 
+# db_pol 表的列顺序定义。
+# 这里集中管理后，查询目录和读取单个污染物都可以复用同一份字段列表。
 POLLUTANT_COLUMNS = (
     "number",
     "p_name",
@@ -27,6 +29,7 @@ POLLUTANT_COLUMNS = (
 
 
 def _row_to_pollutant(row) -> Pollutant:
+    """把数据库行转换成污染物实体对象。"""
     return Pollutant(
         id=int(row["number"]),
         name=row["p_name"] or "",
@@ -48,7 +51,15 @@ def _row_to_pollutant(row) -> Pollutant:
 
 
 class CatalogRepository:
+    """污染物目录仓储层。"""
+
     def list_pollutants(self, keyword: str = "") -> list[Pollutant]:
+        """按关键词查询污染物目录。
+
+        关键词同时匹配中文名和英文名。
+        当前项目故意不在前端默认加载全量目录，
+        因此这个方法会非常频繁地被调用。
+        """
         sql = f"select {', '.join(POLLUTANT_COLUMNS)} from db_pol where 1=1"
         params: list[object] = []
         if keyword.strip():
@@ -61,6 +72,7 @@ class CatalogRepository:
         return [_row_to_pollutant(row) for row in rows]
 
     def get_pollutant(self, pollutant_id: int) -> Pollutant | None:
+        """按编号读取单个污染物。"""
         with connect() as con:
             row = con.execute(
                 f"select {', '.join(POLLUTANT_COLUMNS)} from db_pol where number = ?",
@@ -69,6 +81,7 @@ class CatalogRepository:
         return _row_to_pollutant(row) if row else None
 
     def add_pollutant(self, pollutant: Pollutant) -> int:
+        """新增污染物目录条目。"""
         with connect() as con:
             cursor = con.execute(
                 """
@@ -97,6 +110,7 @@ class CatalogRepository:
             return cursor.rowcount
 
     def update_pollutant(self, pollutant: Pollutant) -> int:
+        """更新污染物目录条目。"""
         with connect() as con:
             cursor = con.execute(
                 """
@@ -127,7 +141,7 @@ class CatalogRepository:
             return cursor.rowcount
 
     def delete_pollutant(self, pollutant_id: int) -> int:
+        """删除污染物目录条目。"""
         with connect() as con:
             cursor = con.execute("delete from db_pol where number = ?", (pollutant_id,))
             return cursor.rowcount
-

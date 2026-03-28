@@ -6,6 +6,9 @@ from risk_backend.models.entities import Pollutant, PollutantConcentration, Sele
 from risk_backend.repositories.database import connect
 
 
+# 这些表都是“与当前工作区强相关”的运行时表。
+# 一个污染物被加入工作区后，除了目录临时表和浓度表以外，
+# 还需要在多张结果表中预留对应行，后续计算时直接按工作区序号更新即可。
 RESULT_TABLES = (
     "db_exposure_ca",
     "db_exposure_nc",
@@ -18,7 +21,28 @@ RESULT_TABLES = (
 
 
 class WorkspaceRepository:
+    """工作区仓储层。
+
+    这一层负责处理“当前评估现场”相关的数据库操作，包括：
+    1. 列出当前工作区中的污染物。
+    2. 把目录中的污染物插入工作区。
+    3. 删除/清空工作区。
+    4. 更新工作区中每一条记录的浓度。
+
+    可以把它理解成“工作台数据库适配器”。
+    """
+
     def list_selected_pollutants(self) -> list[SelectedPollutant]:
+        """读取当前工作区的完整污染物条目。
+
+        这里一次性把三类信息 join 出来：
+        - db_pol_temp: 工作区里选中了哪些污染物
+        - db_pol:      污染物基础理化参数
+        - db_pol_con:  本次评估填写的浓度
+
+        之所以返回 SelectedPollutant，而不是原始 sqlite Row，
+        是为了让上层服务和接口层不用再关心数据库列名细节。
+        """
         with connect() as con:
             rows = con.execute(
                 """
@@ -76,6 +100,17 @@ class WorkspaceRepository:
         return selected
 
     def add_pollutant(self, pollutant: Pollutant) -> int:
+        """把一个污染物加入工作区，并返回新生成的工作区序号。
+
+        这里有两个教学上很重要的点：
+        1. 现在允许“同一个污染物加入多次”，因此不能再按 pollutant.id 去重。
+        2. 数据不是只写一张表，而是要同步写入工作区表、浓度表和所有结果表。
+
+        返回的 workspace_number 会被前端用来：
+        - 自动选中新加入的那一行
+        - 做短暂高亮
+        - 自动滚动到新增位置
+        """
         with connect() as con:
             cursor = con.execute(
                 "insert into db_pol_temp (ID, p_name, e_name) values (?, ?, ?)",
@@ -98,6 +133,11 @@ class WorkspaceRepository:
         return int(workspace_number)
 
     def remove_workspace_row(self, workspace_number: int) -> None:
+        """删除工作区中的某一行。
+
+        因为项目的结果表是按工作区序号一一对应的，
+        所以删除工作区记录时，相关浓度和结果也必须一起删除。
+        """
         with connect() as con:
             con.execute("delete from db_pol_temp where number = ?", (workspace_number,))
             con.execute("delete from db_pol_con where number = ?", (workspace_number,))
@@ -105,6 +145,7 @@ class WorkspaceRepository:
                 con.execute(f"delete from {table} where number = ?", (workspace_number,))
 
     def clear_workspace(self) -> None:
+        """清空整个工作区。"""
         with connect() as con:
             con.execute("delete from db_pol_temp")
             con.execute("delete from db_pol_con")
@@ -112,6 +153,12 @@ class WorkspaceRepository:
                 con.execute(f"delete from {table}")
 
     def update_concentrations(self, items: list[PollutantConcentration]) -> None:
+        """批量更新工作区浓度。
+
+        前端弹窗保存时会一次性提交所有行，因此这里采用批量循环更新。
+        更新依据是 workspace_number，而不是 pollutant_id，
+        原因同样是：同一污染物可能在工作区里出现多次。
+        """
         with connect() as con:
             for item in items:
                 con.execute(

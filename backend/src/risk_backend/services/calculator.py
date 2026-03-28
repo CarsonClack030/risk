@@ -8,6 +8,9 @@ from risk_backend.models.entities import AttributeMap, SelectedPollutant, SiteSe
 from risk_backend.repositories.parameters import ParameterRepository
 
 
+# PATHWAY_FLAGS 把前端路径 key 映射到旧项目里常见的拼音缩写。
+# 这份映射本身不参与公式计算，但它保留了旧版业务语义，
+# 方便后续核对旧代码或纸质公式时快速对照。
 PATHWAY_FLAGS = {
     "ois": "jinkou",
     "dcs": "pitu",
@@ -23,8 +26,17 @@ PATHWAY_FLAGS = {
 
 
 class RiskCalculator:
+    """风险评估公式核心。
+
+    可以把这个类看成整个项目的“计算发动机”：
+    前端负责采集条件，仓储层负责读写数据库，
+    而真正把参数和浓度变成风险结果的，是这里。
+    """
+
     def __init__(self, parameter_repository: ParameterRepository):
         self.parameter_repository = parameter_repository
+        # 下面这些常量名称保留了旧项目写法，
+        # 目的是在重构时尽量不改变原公式的视觉结构。
         self.diansansan = Decimal("3.33")
         self.pai = Decimal("3.14159")
         self.dianwu = Decimal("0.5")
@@ -39,6 +51,11 @@ class RiskCalculator:
         selected_pollutants: list[SelectedPollutant],
         pathway_flags: dict[str, bool],
     ) -> dict[int, dict[str, dict[str, Decimal]]]:
+        """批量计算整个工作区。
+
+        返回值第一层 key 是 workspace_number，
+        这样即使同一个污染物被加入多次，也能分别保存结果。
+        """
         parameters = AttributeMap(self.parameter_repository.get_parameter_map(selection))
         return {
             item.workspace_number: self._calculate_single(selection, parameters, item, pathway_flags)
@@ -52,6 +69,15 @@ class RiskCalculator:
         item: SelectedPollutant,
         pathway_flags: dict[str, bool],
     ) -> dict[str, dict[str, Decimal]]:
+        """计算单个工作区污染物。
+
+        主流程非常值得记住：
+        1. 先创建一份“全部字段都为 0”的状态表。
+        2. 判断污染物是否挥发。
+        3. 挥发型先算气态迁移中间量，再执行所有路径。
+        4. 非挥发型只执行直接接触相关路径。
+        5. 最后把中间结果整理成 7 张结果表的字段。
+        """
         pollutant = item.pollutant
         concentration = item.concentration
         state = self._build_empty_state()
@@ -99,6 +125,11 @@ class RiskCalculator:
         }
 
     def _build_empty_state(self) -> dict[str, Decimal]:
+        """准备统一的零值状态表。
+
+        好处是后续所有路径都可以直接往 state 里写值；
+        未计算的路径自动保持 0，汇总时也不用做空值判断。
+        """
         columns = [
             "OISER_ca", "OISER_nc", "CR_ois", "HQ_ois",
             "DCSER_ca", "DCSER_nc", "CR_dcs", "HQ_dcs",
@@ -125,6 +156,7 @@ class RiskCalculator:
         state: dict[str, Decimal],
         pathways: dict[str, bool],
     ) -> None:
+        """非挥发污染物只跑直接接触路径。"""
         for key in ("ois", "dcs", "pis", "dgw", "cgw"):
             if pathways.get(key):
                 getattr(self, f"_calc_{key}")(selection, par, pollutant, concentration, state)
@@ -138,14 +170,17 @@ class RiskCalculator:
         state: dict[str, Decimal],
         pathways: dict[str, bool],
     ) -> None:
+        """挥发污染物可走全部路径。"""
         for key in PATHWAY_FLAGS:
             if pathways.get(key):
                 getattr(self, f"_calc_{key}")(selection, par, pollutant, concentration, state)
 
     def _first_type(self, selection: SiteSelection) -> bool:
+        """第一类用地通常要同时考虑儿童和成人暴露。"""
         return selection.area_type == "I"
 
     def _safe_div(self, numerator: Decimal, denominator: Decimal) -> Decimal:
+        """安全除法，避免除零导致整次计算失败。"""
         try:
             if denominator == ZERO:
                 return ZERO
@@ -154,12 +189,14 @@ class RiskCalculator:
             return ZERO
 
     def _safe_min(self, left: Decimal, right: Decimal) -> Decimal:
+        """安全取最小值。"""
         try:
             return min(left, right)
         except Exception:
             return ZERO
 
     def _ln(self, value: Decimal) -> Decimal:
+        """安全求自然对数。"""
         try:
             return value.ln()
         except Exception:
@@ -169,24 +206,30 @@ class RiskCalculator:
                 return ZERO
 
     def _pow_e(self, value: Decimal) -> Decimal:
+        """安全计算 e 的指数次幂。"""
         try:
             return Decimal(str(math.e ** float(value)))
         except Exception:
             return ZERO
 
     def _sfd(self, pollutant) -> Decimal:
+        """皮肤接触路径用到的斜率因子折算。"""
         return self._safe_div(pollutant.sfo, pollutant.absgi)
 
     def _rfdd(self, pollutant) -> Decimal:
+        """皮肤接触路径用到的参考剂量折算。"""
         return pollutant.rfdo * pollutant.absgi
 
     def _sfi(self, par: AttributeMap, pollutant) -> Decimal:
+        """吸入路径用到的致癌斜率因子折算。"""
         return pollutant.iur * self._safe_div(par.BWa, par.DAIRa)
 
     def _rfdi(self, par: AttributeMap, pollutant) -> Decimal:
+        """吸入路径用到的参考剂量折算。"""
         return pollutant.rfc * self._safe_div(par.DAIRa, par.BWa)
 
     def _calc_ois(self, selection, par, pollutant, concentration, state):
+        """口摄入土壤颗粒物路径。"""
         if self._first_type(selection):
             state["OISER_ca"] = (
                 (par.OSIRc * par.EDc * par.EFc / par.BWc) +
@@ -205,6 +248,7 @@ class RiskCalculator:
         )
 
     def _calc_dcs(self, selection, par, pollutant, concentration, state):
+        """皮肤接触土壤颗粒物路径。"""
         if self._first_type(selection):
             state["DCSER_ca"] = (
                 par.SAEc * par.SSARc * par.EFc * par.EDc * par.Ev * pollutant.absd * self.dianliu / par.BWc / par.ATca
@@ -227,6 +271,7 @@ class RiskCalculator:
         )
 
     def _calc_pis(self, selection, par, pollutant, concentration, state):
+        """吸入土壤颗粒物路径。"""
         if self._first_type(selection):
             state["PISER_ca"] = (
                 par.PM10 * par.DAIRc * par.EDc * par.PIAF * (par.fspo * par.EFOc + par.fspi * par.EFIc) * self.dianliu / par.BWc / par.ATca
@@ -249,6 +294,7 @@ class RiskCalculator:
         )
 
     def _calc_dgw(self, selection, par, pollutant, concentration, state):
+        """皮肤接触地下水路径。"""
         daec = pollutant.kp * concentration.groundwater_concentration * par.tc * self.diansan
         daea = pollutant.kp * concentration.groundwater_concentration * par.ta * self.diansan
         if self._first_type(selection):
@@ -264,6 +310,7 @@ class RiskCalculator:
         state["HQ_dgw"] = self._safe_div(state["DGWER_nc"], self._rfdd(pollutant))
 
     def _calc_cgw(self, selection, par, pollutant, concentration, state):
+        """饮用地下水路径。"""
         if self._first_type(selection):
             state["CGWER_ca"] = par.GWCRc * par.EFc * par.EDc / par.BWc / par.ATca + par.GWCRa * par.EFa * par.EDa / par.BWa / par.ATca
             state["CGWER_nc"] = par.GWCRc * par.EFc * par.EDc / par.BWc / par.ATnc
@@ -277,10 +324,17 @@ class RiskCalculator:
         )
 
     def _gaspd(self, par: AttributeMap, pollutant, pollutant_name: str) -> dict[str, Decimal]:
+        """计算挥发相关的关键中间量。
+
+        这些值会被后面的室内/室外空气暴露路径复用。
+        可以理解为“先算污染物如何从土壤或地下水迁移到空气中”。
+        """
         gas = self._build_empty_state()
+        # 土壤孔隙相参数。
         gas["Theta"] = to_decimal(1) - self._safe_div(par.Rho_b, par.Rho_s)
         gas["Theta_ws"] = par.Rho_b * par.Pws
         gas["Theta_as"] = gas["Theta"] - gas["Theta_ws"]
+        # 分别计算土壤层、覆盖层、地下水层和裂缝中的有效扩散系数。
         gas["D_eff_s"] = (
             self._safe_div(pollutant.da * (gas["Theta_as"] ** self.diansansan), gas["Theta"] ** 2)
             + self._safe_div(pollutant.dw * (gas["Theta_ws"] ** self.diansansan), (gas["Theta"] ** 2) * pollutant.henry)
@@ -301,6 +355,7 @@ class RiskCalculator:
             )
         )
         gas["f_oc"] = par.fom / self.dianqi / 1000
+        # 某些污染物保留旧项目中的经验 Kd 值，避免和原模型结果偏离。
         if pollutant_name == "汞（无机）":
             gas["K_d"] = Decimal("52")
         elif pollutant_name == "氰化物":
@@ -318,6 +373,8 @@ class RiskCalculator:
         gas["Q_s"] = self._safe_div(2 * self.pai * par.dP * par.K_v * par.X_crack, self.dianba * denominator)
         xxx = self._safe_div(gas["Q_s"] * par.Lcrack, par.Ab * gas["D_eff_crack"] * par.Eit)
         exp_x = self._pow_e(xxx)
+
+        # 如果存在下层污染土壤，则还要考虑寿命/衰减约束，最后取更保守的最小值。
         if par.dsub > 0:
             if gas["Q_s"] == ZERO:
                 gas["VF_subia"] = self._safe_div(
@@ -402,6 +459,7 @@ class RiskCalculator:
         return gas
 
     def _calc_iov3(self, selection, par, pollutant, concentration, state):
+        """吸入室外空气中来自地下水的气态污染物。"""
         if self._first_type(selection):
             state["IOVER_ca3"] = state["VF_gwoa"] * (
                 par.DAIRc * par.EFOc * par.EDc / par.BWc / par.ATca
@@ -418,6 +476,7 @@ class RiskCalculator:
         )
 
     def _calc_iiv2(self, selection, par, pollutant, concentration, state):
+        """吸入室内空气中来自地下水的气态污染物。"""
         if self._first_type(selection):
             state["IIVER_ca2"] = state["VF_gwia"] * (
                 par.DAIRc * par.EFIc * par.EDc / par.BWc / par.ATca
@@ -434,6 +493,7 @@ class RiskCalculator:
         )
 
     def _calc_iov1(self, selection, par, pollutant, concentration, state):
+        """吸入室外空气中来自表层土壤的气态污染物。"""
         if self._first_type(selection):
             state["IOVER_ca1"] = state["VF_suroa"] * (
                 par.DAIRc * par.EFOc * par.EDc / par.BWc / par.ATca
@@ -450,6 +510,7 @@ class RiskCalculator:
         )
 
     def _calc_iov2(self, selection, par, pollutant, concentration, state):
+        """吸入室外空气中来自下层土壤的气态污染物。"""
         if self._first_type(selection):
             state["IOVER_ca2"] = state["VF_suboa"] * (
                 par.DAIRc * par.EFOc * par.EDc / par.BWc / par.ATca
@@ -466,6 +527,7 @@ class RiskCalculator:
         )
 
     def _calc_iiv1(self, selection, par, pollutant, concentration, state):
+        """吸入室内空气中来自下层土壤的气态污染物。"""
         if self._first_type(selection):
             state["IIVER_ca1"] = state["VF_subia"] * (
                 par.DAIRc * par.EFIc * par.EDc / par.BWc / par.ATca
@@ -482,8 +544,17 @@ class RiskCalculator:
         )
 
     def _build_summaries(self, par, pollutant, concentration, state, pollutant_name: str) -> dict[str, Decimal]:
+        """汇总各路径结果，并反推控制值。
+
+        到这里时，各条单一路径的暴露量/风险已经写入 state。
+        这里再完成三件事：
+        1. 土壤相关路径的总风险与贡献率
+        2. 地下水相关路径的总风险与贡献率
+        3. 土壤/地下水风险控制值
+        """
         result = dict(state)
 
+        # 土壤相关路径总致癌风险与贡献率。
         result["CR_sn"] = result["CR_ois"] + result["CR_dcs"] + result["CR_pis"] + result["CR_iov1"] + result["CR_iov2"] + result["CR_iiv1"]
         result["PCR_ois"] = self._safe_div(result["CR_ois"], result["CR_sn"])
         result["PCR_dcs"] = self._safe_div(result["CR_dcs"], result["CR_sn"])
@@ -502,6 +573,7 @@ class RiskCalculator:
         result["PHQ_iiv1"] = self._safe_div(result["HQ_iiv1"], result["HI_sn"])
         result["PHI_sn"] = result["PHQ_ois"] + result["PHQ_dcs"] + result["PHQ_pis"] + result["PHQ_iov1"] + result["PHQ_iov2"] + result["PHQ_iiv1"]
 
+        # 地下水相关路径总致癌风险与贡献率。
         result["CR_wn"] = result["CR_iov3"] + result["CR_iiv2"] + result["CR_dgw"] + result["CR_cgw"]
         result["PCR_iov3"] = self._safe_div(result["CR_iov3"], result["CR_wn"])
         result["PCR_iiv2"] = self._safe_div(result["CR_iiv2"], result["CR_wn"])
@@ -516,6 +588,7 @@ class RiskCalculator:
         result["PHQ_cgw"] = self._safe_div(result["HQ_cgw"], result["HI_wn"])
         result["PHI_wn"] = result["PHQ_iov3"] + result["PHQ_iiv2"] + result["PHQ_dgw"] + result["PHQ_cgw"]
 
+        # 反推土壤风险控制值。
         sfd = self._sfd(pollutant)
         sfi = self._sfi(par, pollutant)
         result["RCVS_n"] = self._safe_div(
@@ -531,6 +604,7 @@ class RiskCalculator:
         rfdi_part = self._safe_div(result["PISER_nc"] + result["IOVER_nc1"] + result["IOVER_nc2"] + result["IIVER_nc1"], rfdi)
         result["HCVS_n"] = self._safe_div(pollutant.saf * par.AHQ, rfdo + rfdd_part + rfdi_part)
 
+        # 保护地下水的土壤控制值，需要重新计算土壤到地下水的稀释/迁移因子。
         theta = to_decimal(1) - self._safe_div(par.Rho_b, par.Rho_s)
         theta_ws = par.Rho_b * par.Pws
         theta_as = theta - theta_ws
@@ -565,4 +639,5 @@ class RiskCalculator:
         return result
 
     def _pick(self, source: dict[str, Decimal], *keys: str) -> dict[str, Decimal]:
+        """从总状态表中挑出某张结果表需要的字段。"""
         return {key: source.get(key, ZERO) for key in keys}

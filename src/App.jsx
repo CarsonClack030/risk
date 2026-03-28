@@ -10,8 +10,23 @@ import {
   WORKSPACE_HEADERS,
 } from "./constants";
 
+// App 是整个前端的主控组件。
+// 这个文件同时承担了几件事：
+// 1. 页面首次启动时，向后端拉取工作区、参数和结果。
+// 2. 维护目录搜索、工作区、参数弹窗、结果弹窗、管理员弹窗等状态。
+// 3. 在用户点击按钮后，调用 api.js 中封装好的后端接口。
+//
+// 也就是说，如果把前端比作一个办公室：
+// - constants.js 提供“表格表头和静态配置”
+// - api.js 提供“对外联络电话”
+// - components.jsx 提供“可复用家具”
+// - App.jsx 则像“总协调人”，负责让所有环节按顺序运转。
 const CATALOG_DISPLAY_LIMIT = 20;
 
+// 深拷贝工具：
+// 参数弹窗、浓度弹窗里编辑的是“草稿数据”，不能直接改原始状态，
+// 否则用户一边输入、一边就把正式数据改掉了。
+// 因此这里统一做一次深拷贝，保证“编辑”和“保存”这两个动作彼此独立。
 function cloneData(value) {
   if (typeof structuredClone === "function") {
     return structuredClone(value);
@@ -19,6 +34,8 @@ function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// 管理员面板里新增污染物时，需要准备一份空白表单。
+// 这里把默认值集中定义，后面“清空表单”和“新建表单初始化”都直接复用。
 function emptyPollutantForm() {
   return {
     name: "",
@@ -39,20 +56,39 @@ function emptyPollutantForm() {
   };
 }
 
+// 统计当前启用了多少条暴露途径。
+// 首页指标卡和底部汇总文案都会用到这个数字。
 function summarizePathways(pathways) {
   return PATHWAYS.filter((item) => pathways[item.key]).length;
 }
 
+// DataTable 组件期望收到统一结构的 rows，
+// 因此这里用一个轻量工具把业务对象转成表格行。
 function toRows(items, mapper) {
   return items.map(mapper);
 }
 
 function App() {
+  // ------------------------
+  // 启动与全局反馈状态
+  // ------------------------
+  // booting: 首次启动遮罩是否显示
+  // error:  顶部错误横幅
+  // notice: 顶部成功/失败提示
+  // health: 后端健康检查及数据库统计
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(null);
   const [health, setHealth] = useState(null);
 
+  // ------------------------
+  // 目录搜索相关状态
+  // ------------------------
+  // catalogKeyword: 用户当前输入的关键词
+  // catalogItems:   当前搜索命中的污染物列表
+  // selectedCatalogId: 当前在目录结果里选中的污染物 ID
+  // catalogHasSearched / catalogMatchCount: 用来驱动提示文案
+  // catalogPickerOpen / catalogActiveIndex: 搜索建议下拉的开关和键盘高亮项
   const [catalogKeyword, setCatalogKeyword] = useState("");
   const [catalogItems, setCatalogItems] = useState([]);
   const [selectedCatalogId, setSelectedCatalogId] = useState(null);
@@ -61,28 +97,49 @@ function App() {
   const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
   const [catalogActiveIndex, setCatalogActiveIndex] = useState(-1);
 
+  // ------------------------
+  // 工作区状态
+  // ------------------------
+  // workspaceItems: 当前已加入工作区的污染物
+  // selectedWorkspaceNumber: 当前选中的工作区行号
+  // highlightedWorkspaceNumber: 最近一次新增/强调的行号，用于高亮动画
   const [workspaceItems, setWorkspaceItems] = useState([]);
   const [selectedWorkspaceNumber, setSelectedWorkspaceNumber] = useState(null);
   const [highlightedWorkspaceNumber, setHighlightedWorkspaceNumber] = useState(null);
 
+  // ------------------------
+  // 计算条件状态
+  // ------------------------
+  // standard: G=国家标准，Z=浙江标准
+  // areaType: I/II 两类用地
+  // pathways: 暴露途径勾选矩阵
   const [standard, setStandard] = useState("G");
   const [areaType, setAreaType] = useState("I");
   const [pathways, setPathways] = useState(
     Object.fromEntries(PATHWAYS.map((item) => [item.key, false])),
   );
 
+  // ------------------------
+  // 参数弹窗状态
+  // ------------------------
+  // parameterGroups: 正式参数
+  // parameterDraft:  弹窗中的编辑草稿
+  // activeParameterGroupId: 当前正在编辑哪一组参数
   const [parameterGroups, setParameterGroups] = useState([]);
   const [parameterDraft, setParameterDraft] = useState([]);
   const [parameterModalOpen, setParameterModalOpen] = useState(false);
   const [activeParameterGroupId, setActiveParameterGroupId] = useState(1);
 
+  // 浓度弹窗草稿状态。
   const [concentrationDraft, setConcentrationDraft] = useState([]);
   const [concentrationModalOpen, setConcentrationModalOpen] = useState(false);
 
+  // 结果弹窗状态。
   const [results, setResults] = useState([]);
   const [resultModalOpen, setResultModalOpen] = useState(false);
   const [activeResultKey, setActiveResultKey] = useState("db_exposure_ca");
 
+  // 管理员面板状态。
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [adminUser, setAdminUser] = useState("");
@@ -96,16 +153,24 @@ function App() {
     new_password: "",
     confirm_password: "",
   });
+
+  // 用于在成功加入工作区后，把光标重新送回搜索框，
+  // 这样用户可以连续录入多个污染物。
   const catalogInputRef = useRef(null);
 
+  // useDeferredValue 可以把“用户输入”和“真正触发查询”稍微错开。
+  // 好处是：用户快速敲字时，界面不会因为每个字符都立即请求后端而发抖。
   const deferredCatalogKeyword = useDeferredValue(catalogKeyword);
   const deferredAdminKeyword = useDeferredValue(adminKeyword);
 
+  // 下面这些是“派生数据”，它们不是独立状态，
+  // 而是从已有状态中计算出来，避免重复存储。
   const selectedCatalogItem = catalogItems.find((item) => item.id === selectedCatalogId) || null;
   const selectedWorkspaceItem =
     workspaceItems.find((item) => item.workspace_number === selectedWorkspaceNumber) || null;
   const selectedAdminItem = adminItems.find((item) => item.id === selectedAdminId) || null;
 
+  // 顶部 notice 横幅显示一段时间后自动消失。
   useEffect(() => {
     if (!notice) {
       return undefined;
@@ -114,6 +179,10 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  // 启动流程：
+  // 1. 先轮询 health，等待 Python 后端真正起来。
+  // 2. 再并行拉取工作区、参数、结果表。
+  // 3. 最后一次性写入前端状态，减少首屏抖动。
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
@@ -152,6 +221,7 @@ function App() {
     };
   }, []);
 
+  // 目录关键词变化后刷新污染物目录。
   useEffect(() => {
     if (booting) {
       return;
@@ -159,6 +229,7 @@ function App() {
     refreshCatalog(deferredCatalogKeyword);
   }, [booting, deferredCatalogKeyword]);
 
+  // 管理员面板打开后，管理员搜索框的关键词变化也会触发查询。
   useEffect(() => {
     if (!adminPanelOpen) {
       return;
@@ -166,6 +237,10 @@ function App() {
     refreshAdminCatalog(deferredAdminKeyword);
   }, [adminPanelOpen, deferredAdminKeyword]);
 
+  // 这个 effect 专门处理搜索建议的“默认高亮项”。
+  // 当建议框打开时：
+  // - 如果之前已经有选中项，就尽量把它对应的建议高亮起来；
+  // - 如果没有，就默认高亮第一项，方便用户直接回车。
   useEffect(() => {
     const suggestions = catalogItems.slice(0, 8);
     if (!catalogPickerOpen || suggestions.length === 0) {
@@ -181,6 +256,8 @@ function App() {
     });
   }, [catalogItems, catalogPickerOpen, selectedCatalogId]);
 
+  // 当管理员在列表中选中某个污染物时，
+  // 右侧表单自动带出该污染物的当前属性，进入“编辑模式”。
   useEffect(() => {
     if (!selectedAdminItem) {
       return;
@@ -204,6 +281,8 @@ function App() {
     });
   }, [selectedAdminItem]);
 
+  // 工作区新增高亮只保留短短一段时间，
+  // 避免长期高亮影响表格阅读。
   useEffect(() => {
     if (highlightedWorkspaceNumber === null) {
       return undefined;
@@ -212,6 +291,8 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [highlightedWorkspaceNumber]);
 
+  // 启动初期后端可能还没监听端口，因此这里采用“带重试的健康检查”。
+  // Tauri 前端通常启动比 Python sidecar 稍快，这个等待过程很常见。
   async function waitForHealth() {
     let lastError = new Error("后端尚未启动");
     for (let index = 0; index < 24; index += 1) {
@@ -225,16 +306,20 @@ function App() {
     throw lastError;
   }
 
+  // 统一弹横幅通知。
   function flash(kind, text) {
     setNotice({ kind, text });
   }
 
+  // 让搜索框重新拿到焦点，用于连续录入。
   function focusCatalogInput() {
     window.setTimeout(() => {
       catalogInputRef.current?.focus();
     }, 0);
   }
 
+  // 重置目录搜索态。
+  // 这里不仅清空关键词，也会把建议框、高亮项、已选污染物一起复位。
   function resetCatalogSearch({ focus = false } = {}) {
     startTransition(() => {
       setCatalogItems([]);
@@ -250,6 +335,8 @@ function App() {
     }
   }
 
+  // 查询污染物目录。
+  // 这里刻意要求“有关键词才查询”，避免把近千条污染物默认全铺开。
   async function refreshCatalog(keyword = "") {
     const trimmed = keyword.trim();
     if (!trimmed) {
@@ -271,6 +358,9 @@ function App() {
     }
   }
 
+  // 从后端重新同步工作区，常用于：
+  // - 手动点击“同步”
+  // - 执行删除/重置后刷新前端状态
   async function refreshWorkspace() {
     const payload = await api.listWorkspace();
     startTransition(() => {
@@ -285,6 +375,8 @@ function App() {
     setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
   }
 
+  // 重新读取结果表。
+  // 因为后端的计算结果最终落在数据库结果表中，前端只负责重新显示。
   async function refreshResults() {
     const payload = await api.listResults();
     setResults(payload.tables);
@@ -293,6 +385,7 @@ function App() {
     }
   }
 
+  // 管理员污染物库查询。
   async function refreshAdminCatalog(keyword = "") {
     try {
       const payload = await api.listCatalog(keyword);
@@ -307,6 +400,8 @@ function App() {
     }
   }
 
+  // 用户从建议项或表格里点中某个污染物时，
+  // 同步“输入框内容 + 选中项 + 建议框状态”。
   function syncCatalogSelection(item) {
     setSelectedCatalogId(item.id);
     setCatalogKeyword(item.name || item.english_name || String(item.id));
@@ -314,6 +409,11 @@ function App() {
     setCatalogActiveIndex(-1);
   }
 
+  // 把目录中的某个污染物加入工作区。
+  // 这是左侧搜索区最核心的动作链：
+  // 1. 先向后端插入一条工作区记录；
+  // 2. 再用返回的新行号选中并高亮它；
+  // 3. 最后清空搜索框，准备连续录入下一条。
   async function addCatalogItemToWorkspace(item) {
     if (!item) {
       flash("error", "请先选择一个污染物");
@@ -334,14 +434,20 @@ function App() {
     }
   }
 
+  // 按钮版“加入工作区”，底层仍复用统一入口。
   async function handleAddToWorkspace() {
     await addCatalogItemToWorkspace(selectedCatalogItem);
   }
 
+  // 点击表格行时，仅同步选中状态，不直接写工作区。
   function selectCatalogItem(item) {
     syncCatalogSelection(item);
   }
 
+  // 搜索框键盘交互：
+  // Esc: 关闭建议
+  // ↑/↓: 移动高亮项
+  // Enter: 把当前高亮项直接加入工作区
   async function handleCatalogInputKeyDown(event) {
     if (event.key === "Escape") {
       setCatalogPickerOpen(false);
@@ -394,6 +500,7 @@ function App() {
     }
   }
 
+  // 删除当前工作区选中项。
   async function handleRemoveWorkspace() {
     if (!selectedWorkspaceItem) {
       flash("error", "请先在工作区选择一条记录");
@@ -412,6 +519,8 @@ function App() {
     }
   }
 
+  // 清空工作区，同时把前端勾选的暴露途径也复位。
+  // 这样用户会得到一个真正“从头开始”的空白现场。
   async function handleResetWorkspace() {
     try {
       const payload = await api.resetWorkspace();
@@ -427,12 +536,14 @@ function App() {
     }
   }
 
+  // 打开参数弹窗时，正式参数会被复制成草稿。
   function openParameterModal() {
     setParameterDraft(cloneData(parameterGroups));
     setActiveParameterGroupId(parameterGroups[0]?.id || 1);
     setParameterModalOpen(true);
   }
 
+  // 打开浓度弹窗时，把当前工作区浓度复制成可编辑草稿。
   function openConcentrationModal() {
     if (workspaceItems.length === 0) {
       flash("error", "工作区为空，先添加污染物");
@@ -456,6 +567,7 @@ function App() {
     setConcentrationModalOpen(true);
   }
 
+  // 保存参数到数据库。
   async function handleSaveParameters() {
     try {
       const payload = await api.saveParameters(parameterDraft);
@@ -467,6 +579,7 @@ function App() {
     }
   }
 
+  // 恢复默认参数，并同时刷新正式参数和草稿。
   async function handleResetParameters() {
     try {
       const payload = await api.resetParameters();
@@ -478,6 +591,7 @@ function App() {
     }
   }
 
+  // 保存浓度草稿。
   async function handleSaveConcentrations() {
     try {
       const payload = await api.updateConcentrations(concentrationDraft);
@@ -489,6 +603,9 @@ function App() {
     }
   }
 
+  // 触发核心风险计算。
+  // 前端只负责收集“标准/用地/路径”这三个条件，
+  // 真正公式计算发生在 Python 后端。
   async function handleCalculate() {
     try {
       const payload = await api.calculate({
@@ -505,6 +622,8 @@ function App() {
     }
   }
 
+  // 导出结果表为 Excel。
+  // 后端返回的是二进制 Blob，前端临时创建一个下载链接来触发保存。
   async function handleExportResults() {
     try {
       const blob = await api.exportResults();
@@ -520,11 +639,13 @@ function App() {
     }
   }
 
+  // 打开管理员登录框时，默认带上上次登录名，方便重复登录。
   function handleOpenAdmin() {
     setLoginForm({ username: adminUser || "", password: "" });
     setAdminLoginOpen(true);
   }
 
+  // 管理员登录成功后，立即打开污染物库管理面板。
   async function handleAdminLogin() {
     try {
       const payload = await api.login(loginForm.username, loginForm.password);
@@ -542,6 +663,8 @@ function App() {
     }
   }
 
+  // 管理员保存污染物。
+  // mode=create 表示新增，mode=update 表示更新当前选中项。
   async function handleAdminSave(mode) {
     try {
       if (mode === "create") {
@@ -563,6 +686,7 @@ function App() {
     }
   }
 
+  // 删除管理员当前选中的污染物。
   async function handleAdminDelete() {
     if (!selectedAdminItem) {
       flash("error", "请先选择要删除的污染物");
@@ -582,6 +706,7 @@ function App() {
     }
   }
 
+  // 管理员修改密码。
   async function handlePasswordUpdate() {
     if (passwordForm.new_password !== passwordForm.confirm_password) {
       flash("error", "两次新密码输入不一致");
@@ -602,6 +727,9 @@ function App() {
     }
   }
 
+  // ------------------------
+  // 下面开始构造表格显示数据
+  // ------------------------
   const catalogRows = toRows(catalogItems, (item) => ({
     key: item.id,
     cells: [item.id, item.name, item.english_name],
@@ -662,6 +790,7 @@ function App() {
 
   const activeResult = results.find((table) => table.key === activeResultKey) || results[0];
 
+  // 启动遮罩：只在最开始健康检查和初次数据加载期间显示。
   if (booting) {
     return (
       <div className="splash-screen">
@@ -679,6 +808,7 @@ function App() {
       <div className="bg-orb orb-one" />
       <div className="bg-orb orb-two" />
 
+      {/* 顶部标题区：保留了桌面工作台常用的“标题 + 快捷操作”结构。 */}
       <header className="hero-panel">
         <div>
           <h1>污染场地风险评估系统</h1>
@@ -699,6 +829,7 @@ function App() {
       {error ? <section className="banner error-banner">{error}</section> : null}
       {notice ? <section className={`banner ${notice.kind}-banner`}>{notice.text}</section> : null}
 
+      {/* 指标卡区：帮助用户快速确认当前运行状态。 */}
       <section className="metrics-grid">
         <MetricCard
           label="工作区污染物"
@@ -726,6 +857,7 @@ function App() {
         />
       </section>
 
+      {/* 控制区：标准、用地类型、暴露途径都属于“计算前条件”。 */}
       <section className="control-panel">
         <div className="control-card">
           <span>用地类型</span>
@@ -789,6 +921,7 @@ function App() {
         </div>
       </section>
 
+      {/* 主工作台：左边是目录搜索，右边是工作区。 */}
       <main className="workspace-grid">
         <section className="panel-card">
           <div className="panel-head">
@@ -828,6 +961,8 @@ function App() {
                           className={`suggestion-item ${catalogActiveIndex === index ? "is-active" : ""}`}
                           onMouseDown={(event) => {
                             event.preventDefault();
+                            // 这里用 onMouseDown 而不是 onClick，
+                            // 是为了避免 input 先失焦、建议框提前关闭，导致点击失效。
                             void addCatalogItemToWorkspace(item);
                           }}
                           onMouseEnter={() => setCatalogActiveIndex(index)}
@@ -916,6 +1051,7 @@ function App() {
         </section>
       </main>
 
+      {/* 底部操作条：在用户准备好条件后，通常会从这里发起计算。 */}
       <footer className="action-deck">
         <div>
           <strong>当前选择</strong>
@@ -935,6 +1071,7 @@ function App() {
         </div>
       </footer>
 
+      {/* 参数弹窗：编辑原有四组参数模板。 */}
       {parameterModalOpen ? (
         <Modal
           title="参数设置"
@@ -1018,6 +1155,7 @@ function App() {
         </Modal>
       ) : null}
 
+      {/* 浓度弹窗：批量维护工作区里每条记录的浓度。 */}
       {concentrationModalOpen ? (
         <Modal
           title="污染物浓度设置"
@@ -1081,6 +1219,7 @@ function App() {
         </Modal>
       ) : null}
 
+      {/* 结果弹窗：把后端结果表格式化后展示为桌面表格。 */}
       {resultModalOpen ? (
         <Modal
           title="计算结果"
@@ -1123,6 +1262,7 @@ function App() {
         </Modal>
       ) : null}
 
+      {/* 管理员登录弹窗：进入污染物库维护前的身份校验。 */}
       {adminLoginOpen ? (
         <Modal
           title="管理员登录"
@@ -1161,6 +1301,7 @@ function App() {
         </Modal>
       ) : null}
 
+      {/* 管理员面板：查询、增删改污染物，并可修改密码。 */}
       {adminPanelOpen ? (
         <Modal
           title="污染物数据库管理"

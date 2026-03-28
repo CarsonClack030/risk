@@ -1,3 +1,10 @@
+// 这个文件专门存放“纯配置型数据”。
+// 把这些常量集中管理有两个好处：
+// 1. 界面渲染时不会把业务词典散落在各个组件里。
+// 2. 后续如果要改显示名称、列顺序、表头文字，只需要在这里改一次。
+
+// 暴露途径的 key 会直接和后端的计算标志对应。
+// label 则是界面上给用户展示的中文说明。
 export const PATHWAYS = [
   { key: "ois", label: "口摄入土壤颗粒物" },
   { key: "dcs", label: "皮肤接触土壤颗粒物" },
@@ -11,6 +18,8 @@ export const PATHWAYS = [
   { key: "cgw", label: "饮用地下水" },
 ];
 
+// 管理员窗口里展示完整污染物库时使用的表头。
+// 这里保留了全部参数列，方便教学时理解污染物数据库到底存了哪些字段。
 export const CATALOG_HEADERS = [
   "编号",
   "污染物名称",
@@ -30,8 +39,11 @@ export const CATALOG_HEADERS = [
   "Kp",
 ];
 
+// 主界面挑选污染物时只保留最核心的三列，避免用户被大量理化参数干扰。
 export const CATALOG_PICKER_HEADERS = ["编号", "污染物名称", "英文名"];
 
+// 工作区是“已经参与本次计算”的污染物列表。
+// 这里的列会同时服务于浓度编辑、工作区浏览以及结果定位。
 export const WORKSPACE_HEADERS = [
   "序号",
   "污染物编号",
@@ -43,6 +55,8 @@ export const WORKSPACE_HEADERS = [
   "地下水保护浓度",
 ];
 
+// 管理员维护污染物时的表单字段定义。
+// key 对应后端接口字段，label 对应界面中文名称。
 export const POLLUTANT_FORM_FIELDS = [
   { key: "name", label: "污染物名称" },
   { key: "english_name", label: "污染物英文名" },
@@ -61,6 +75,8 @@ export const POLLUTANT_FORM_FIELDS = [
   { key: "kp", label: "Kp" },
 ];
 
+// 参数设置弹窗中的四类标准列。
+// 这些 key 会直接映射到数据库参数表字段名。
 export const PARAMETER_COLUMNS = [
   { key: "data_gi", label: "国家一类用地" },
   { key: "data_gii", label: "国家二类用地" },

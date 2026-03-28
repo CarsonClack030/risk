@@ -19,6 +19,20 @@ from risk_backend.repositories.workspace import WorkspaceRepository
 from risk_backend.services.calculator import RiskCalculator
 
 
+# 这里是 Python 后端的“HTTP 门面层”。
+# 它的职责不是做公式本身，而是负责：
+# 1. 把前端传来的 JSON 转成 Python 对象。
+# 2. 调用仓储层 / 服务层执行业务动作。
+# 3. 再把 Python 对象序列化成前端能直接消费的 JSON。
+#
+# 你可以把它理解成：
+# 前端说“我要查目录”“我要开始计算”，
+# api_server.py 负责把这些口语化请求翻译成后端内部动作。
+
+# 前端勾选的路径 key 和原业务中文说明的对应表。
+# 这份映射会被计算接口用于：
+# - 校验所有路径字段是否齐全
+# - 统一管理各条路径的语义名称
 PATHWAY_LABELS = {
     "ois": "口摄入土壤颗粒物",
     "dcs": "皮肤接触土壤颗粒物",
@@ -32,6 +46,17 @@ PATHWAY_LABELS = {
     "iiv1": "吸入室内空气中来自下层土壤的气态污染物",
 }
 
+# 结果表配置：
+# 项目里最终要展示 7 张结果表，每一张表都包含：
+# - table:          对应数据库表名
+# - title:          前端标签页标题
+# - columns:        数据库实际列顺序
+# - headers:        前端展示表头
+# - displayColumns: 真正需要给用户看的列
+#
+# 之所以集中在这里，而不是散落到多个函数中，
+# 是因为“数据库列结构”和“前端展示结构”天然是一对多关系，
+# 配置化以后，序列化和导出都能直接复用这份定义。
 RESULT_CONFIGS = [
     {
         "table": "db_exposure_ca",
@@ -160,16 +185,26 @@ POLLUTANT_FIELDS = (
 
 
 def _json_value(value):
+    """把 Decimal 等 Python 对象转换成 JSON 友好的值。"""
     if isinstance(value, Decimal):
         return float(value)
     return value
 
 
 def serialize_pollutant(pollutant: Pollutant) -> dict[str, object]:
+    """把污染物实体对象转成前端可读字典。"""
     return {field: _json_value(getattr(pollutant, field)) for field in POLLUTANT_FIELDS}
 
 
 def serialize_selected(item) -> dict[str, object]:
+    """把工作区中的聚合对象拆成前端可消费结构。
+
+    注意这里同时保留了：
+    - pollutant:     污染物基础属性
+    - concentration: 当前工作区里的浓度
+
+    这样前端在一个 payload 里就能拿到“这个污染物是什么”和“当前浓度是多少”。
+    """
     return {
         "workspace_number": item.workspace_number,
         "pollutant": serialize_pollutant(item.pollutant),
@@ -189,6 +224,7 @@ def serialize_selected(item) -> dict[str, object]:
 
 
 def serialize_parameter_group(group_id: int, rows: list[ParameterRow]) -> dict[str, object]:
+    """把某一组参数整理成参数弹窗需要的格式。"""
     return {
         "id": group_id,
         "title": PARAMETER_GROUPS[group_id],
@@ -208,6 +244,11 @@ def serialize_parameter_group(group_id: int, rows: list[ParameterRow]) -> dict[s
 
 
 def format_result_value(value):
+    """把结果值格式化成前端展示文本。
+
+    大部分风险结果是非常小的数字，直接展示原始浮点数可读性很差，
+    因此这里统一转为科学计数法。
+    """
     if value in (None, ""):
         return ""
     if isinstance(value, float):
@@ -216,6 +257,7 @@ def format_result_value(value):
 
 
 def serialize_results(result_repository: ResultRepository) -> list[dict[str, object]]:
+    """把数据库中的结果表转换为前端标签页数据。"""
     tables: list[dict[str, object]] = []
     for config in RESULT_CONFIGS:
         raw_rows = result_repository.fetch_table(config["table"])
@@ -235,6 +277,7 @@ def serialize_results(result_repository: ResultRepository) -> list[dict[str, obj
 
 
 def build_export_rows(result_repository: ResultRepository) -> list[list[str]]:
+    """把结果表铺平成适合导出 Excel 的二维数组。"""
     rows: list[list[str]] = []
     for table in serialize_results(result_repository):
         rows.append([table["title"]])
@@ -245,7 +288,21 @@ def build_export_rows(result_repository: ResultRepository) -> list[list[str]]:
 
 
 class RiskBackend:
+    """后端业务门面。
+
+    这是 HTTP 请求真正调用的业务对象。它把多个仓储和服务组装起来，
+    对外暴露的是“面向界面动作”的方法，例如：
+    - list_catalog
+    - add_workspace_item
+    - calculate
+    - export_results
+
+    因此前端无需知道数据库细节，只需命中对应接口即可。
+    """
+
     def __init__(self):
+        # 确保运行库数据库存在是整个后端的第一步。
+        # 首次运行时，这里会把模板数据库复制到本地应用目录。
         ensure_database()
         self.catalog_repository = CatalogRepository()
         self.workspace_repository = WorkspaceRepository()
@@ -255,6 +312,15 @@ class RiskBackend:
         self.calculator = RiskCalculator(self.parameter_repository)
 
     def health(self) -> dict[str, object]:
+        """健康检查接口。
+
+        除了告诉前端“后端在线”，还会顺手带上：
+        - 当前运行数据库路径
+        - 污染物总数
+        - 工作区污染物总数
+
+        这样前端首页的指标卡就能一次性拿到所需信息。
+        """
         return {
             "status": "ok",
             "database": str(Path(RUNTIME_DB)),
@@ -263,14 +329,17 @@ class RiskBackend:
         }
 
     def list_catalog(self, keyword: str) -> dict[str, object]:
+        """查询污染物目录。"""
         rows = self.catalog_repository.list_pollutants(keyword)
         return {"items": [serialize_pollutant(row) for row in rows], "total": len(rows)}
 
     def list_workspace(self) -> dict[str, object]:
+        """列出当前工作区。"""
         rows = self.workspace_repository.list_selected_pollutants()
         return {"items": [serialize_selected(row) for row in rows], "total": len(rows)}
 
     def add_workspace_item(self, pollutant_id: int) -> dict[str, object]:
+        """把目录中的某个污染物加入工作区。"""
         pollutant = self.catalog_repository.get_pollutant(pollutant_id)
         if pollutant is None:
             raise ValueError("未找到对应污染物")
@@ -280,15 +349,18 @@ class RiskBackend:
         return payload
 
     def remove_workspace_item(self, workspace_number: int) -> dict[str, object]:
+        """移除工作区中的一行。"""
         self.workspace_repository.remove_workspace_row(workspace_number)
         return self.list_workspace()
 
     def reset_workspace(self) -> dict[str, object]:
+        """清空工作区，并重置结果表。"""
         self.workspace_repository.clear_workspace()
         self.result_repository.reset()
         return self.list_workspace()
 
     def update_concentrations(self, payload_items: list[dict[str, object]]) -> dict[str, object]:
+        """保存前端提交的浓度草稿。"""
         items = [
             PollutantConcentration(
                 workspace_number=int(item["workspace_number"]),
@@ -308,6 +380,7 @@ class RiskBackend:
         return self.list_workspace()
 
     def list_parameters(self) -> dict[str, object]:
+        """列出四组参数模板。"""
         return {
             "groups": [
                 serialize_parameter_group(group_id, self.parameter_repository.list_group_rows(group_id))
@@ -316,10 +389,12 @@ class RiskBackend:
         }
 
     def reset_parameters(self) -> dict[str, object]:
+        """恢复默认参数。"""
         self.parameter_repository.reset_defaults()
         return self.list_parameters()
 
     def save_parameters(self, groups: list[dict[str, object]]) -> dict[str, object]:
+        """保存参数弹窗中的所有组。"""
         for group in groups:
             rows = [
                 ParameterRow(
@@ -337,6 +412,16 @@ class RiskBackend:
         return self.list_parameters()
 
     def calculate(self, payload: dict[str, object]) -> dict[str, object]:
+        """执行风险计算主流程。
+
+        这条链路是项目最核心的一步：
+        1. 读取工作区污染物和浓度。
+        2. 校验是否至少选了一条暴露途径。
+        3. 构造场地选择条件（标准 + 用地类型）。
+        4. 交给 RiskCalculator 执行公式计算。
+        5. 把每条工作区结果写回各张结果表。
+        6. 再把结果表序列化返回给前端。
+        """
         selected = self.workspace_repository.list_selected_pollutants()
         if not selected:
             raise ValueError("请先把污染物加入工作区")
@@ -355,12 +440,15 @@ class RiskBackend:
         return {"tables": serialize_results(self.result_repository)}
 
     def list_results(self) -> dict[str, object]:
+        """读取当前结果表。"""
         return {"tables": serialize_results(self.result_repository)}
 
     def export_results(self) -> bytes:
+        """导出当前结果为 Excel 二进制内容。"""
         return build_xlsx(build_export_rows(self.result_repository))
 
     def login(self, payload: dict[str, object]) -> dict[str, object]:
+        """管理员登录校验。"""
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", "")).strip()
         if not username or not password:
@@ -369,6 +457,7 @@ class RiskBackend:
         return {"success": success, "username": username if success else ""}
 
     def update_password(self, payload: dict[str, object]) -> dict[str, object]:
+        """管理员修改密码。"""
         username = str(payload.get("username", "")).strip()
         old_password = str(payload.get("old_password", "")).strip()
         new_password = str(payload.get("new_password", "")).strip()
@@ -380,6 +469,7 @@ class RiskBackend:
         return {"success": updated > 0}
 
     def add_pollutant(self, payload: dict[str, object]) -> dict[str, object]:
+        """新增污染物目录条目。"""
         pollutant = self._build_pollutant(payload)
         if not pollutant.name:
             raise ValueError("污染物名称不能为空")
@@ -387,15 +477,18 @@ class RiskBackend:
         return self.list_catalog(str(payload.get("keyword", "")))
 
     def update_pollutant(self, pollutant_id: int, payload: dict[str, object]) -> dict[str, object]:
+        """更新目录中的某个污染物。"""
         pollutant = self._build_pollutant(payload, pollutant_id)
         self.catalog_repository.update_pollutant(pollutant)
         return self.list_catalog(str(payload.get("keyword", "")))
 
     def delete_pollutant(self, pollutant_id: int, keyword: str) -> dict[str, object]:
+        """删除污染物并返回当前查询结果。"""
         self.catalog_repository.delete_pollutant(pollutant_id)
         return self.list_catalog(keyword)
 
     def _build_pollutant(self, payload: dict[str, object], pollutant_id: int = 0) -> Pollutant:
+        """把前端提交的表单数据组装成 Pollutant 实体。"""
         return Pollutant(
             id=pollutant_id,
             name=str(payload.get("name", "")).strip(),
@@ -417,14 +510,26 @@ class RiskBackend:
 
 
 class RequestHandler(BaseHTTPRequestHandler):
+    """最薄的一层 HTTP 路由处理器。
+
+    BaseHTTPRequestHandler 不像 FastAPI/Flask 那样自带路由系统，
+    所以这里用最直接的 if/else 分发请求。
+
+    教学上可以重点观察：
+    - do_GET / do_POST / do_PUT / do_DELETE 各自对应什么操作
+    - RequestHandler 不做业务细节，只负责收发 HTTP 数据
+    """
+
     backend = RiskBackend()
 
     def do_OPTIONS(self) -> None:
+        # 处理浏览器和 WebView 的预检请求。
         self.send_response(HTTPStatus.NO_CONTENT)
         self._write_cors_headers()
         self.end_headers()
 
     def do_GET(self) -> None:
+        """只读接口：健康检查、目录、工作区、参数、结果。"""
         try:
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
@@ -448,6 +553,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_error(str(exc))
 
     def do_POST(self) -> None:
+        """创建型或动作型接口。"""
         try:
             parsed = urlparse(self.path)
             payload = self._read_json()
@@ -484,6 +590,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_error(str(exc))
 
     def do_PUT(self) -> None:
+        """更新型接口。"""
         try:
             parsed = urlparse(self.path)
             payload = self._read_json()
@@ -502,6 +609,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_error(str(exc))
 
     def do_DELETE(self) -> None:
+        """删除型接口。"""
         try:
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
@@ -518,9 +626,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_error(str(exc))
 
     def log_message(self, format: str, *args) -> None:
+        # 关闭 http.server 默认日志，避免桌面端启动时刷屏。
         return
 
     def _read_json(self) -> dict[str, object]:
+        """把请求体读成 JSON 对象。"""
         content_length = int(self.headers.get("Content-Length", "0"))
         if content_length == 0:
             return {}
@@ -530,6 +640,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
+        """发送 JSON 响应。"""
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self._write_cors_headers()
@@ -539,6 +650,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_binary(self, payload: bytes, content_type: str, filename: str) -> None:
+        """发送二进制响应，用于 Excel 导出。"""
         self.send_response(HTTPStatus.OK)
         self._write_cors_headers()
         self.send_header("Content-Type", content_type)
@@ -548,20 +660,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _send_error(self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
+        """统一错误出口。"""
         self._send_json({"error": message}, status=status)
 
     def _write_cors_headers(self) -> None:
+        # 当前桌面端和浏览器调试都走本地请求，因此这里统一开放本地跨域。
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 
 
 def _first_query(params: dict[str, list[str]], key: str) -> str:
+    """从 parse_qs 结果中安全取第一个查询参数值。"""
     values = params.get(key)
     return values[0] if values else ""
 
 
 def run(host: str = "127.0.0.1", port: int = 38911) -> None:
+    """启动线程化 HTTP 服务。"""
     server = ThreadingHTTPServer((host, port), RequestHandler)
     print(f"risk-backend listening on http://{host}:{port}")
     try:
@@ -573,6 +689,7 @@ def run(host: str = "127.0.0.1", port: int = 38911) -> None:
 
 
 def main() -> None:
+    """命令行入口，供桌面壳或开发时直接调用。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=38911)

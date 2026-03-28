@@ -7,6 +7,9 @@ from risk_backend.repositories.database import connect
 
 
 class ResultRepository:
+    """结果表仓储层。"""
+
+    # reset 时只需要清空结果列，不动污染物编号、名称和工作区序号。
     RESET_SQL = {
         "db_exposure_ca": (
             "OISER_ca", "DCSER_ca", "PISER_ca", "IOVER_ca1", "IOVER_ca2",
@@ -35,6 +38,7 @@ class ResultRepository:
         "db_cv": ("RCVS_n", "HCVS_n", "RCVG_n", "HCVG_n", "CVS_pgw"),
     }
 
+    # 不同结果表沿用旧项目里的排序习惯。
     TABLE_ORDERS = {
         "db_exposure_ca": "order by ID, number",
         "db_exposure_nc": "order by ID, number",
@@ -46,12 +50,14 @@ class ResultRepository:
     }
 
     def reset(self) -> None:
+        """清空所有结果值，但保留工作区占位行。"""
         with connect() as con:
             for table, columns in self.RESET_SQL.items():
                 assignment = ", ".join(f"{column} = NULL" for column in columns)
                 con.execute(f"update {table} set {assignment}")
 
     def update_table(self, table: str, workspace_number: int, values: dict[str, object]) -> None:
+        """把某条工作区记录的计算结果写回指定结果表。"""
         if not values:
             return
         set_sql = ", ".join(f"{column} = ?" for column in values)
@@ -64,6 +70,7 @@ class ResultRepository:
             )
 
     def fetch_table(self, table: str) -> list[list[object]]:
+        """读取整张结果表，用于前端展示和导出。"""
         with connect() as con:
             rows = con.execute(f"select * from {table} {self.TABLE_ORDERS[table]}").fetchall()
         return [list(row) for row in rows]
