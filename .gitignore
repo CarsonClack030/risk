@@ -1,11 +1,24 @@
+# Frontend dependencies and build outputs
 node_modules
 dist
+
+# Tauri / Rust build outputs
 src-tauri/target
+
+# Python backend packaging artifacts
 backend/bin
 backend/build
-backend/__pycache__
-backend/src/risk_backend/__pycache__
-backend/src/risk_backend/models/__pycache__
-backend/src/risk_backend/repositories/__pycache__
-backend/src/risk_backend/services/__pycache__
+
+# Runtime data generated on the local machine
 .runtime_data
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# macOS Finder metadata
+.DS_Store
+
+# SQLite transient files
+*.db-shm
+*.db-wal
