@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Iterable
-
 from risk_backend.models.entities import Pollutant, to_decimal
 from risk_backend.repositories.database import connect
 
@@ -52,6 +50,15 @@ def _row_to_pollutant(row) -> Pollutant:
 
 class CatalogRepository:
     """污染物目录仓储层。"""
+
+    def count_pollutants(self) -> int:
+        """统计污染物目录总数。
+
+        这比先读取整张目录再 `len(...)` 更适合健康检查或首页指标卡场景。
+        """
+        with connect() as con:
+            row = con.execute("select count(*) as total from db_pol").fetchone()
+        return int(row["total"] if row else 0)
 
     def list_pollutants(self, keyword: str = "") -> list[Pollutant]:
         """按关键词查询污染物目录。

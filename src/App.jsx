@@ -422,8 +422,15 @@ function App() {
     try {
       syncCatalogSelection(item);
       const payload = await api.addWorkspaceItem(item.id);
-      setWorkspaceItems(payload.items);
-      const addedWorkspaceNumber = payload.added_workspace_number ?? null;
+      // 这里不再每次都让后端回传整张工作区，
+      // 而是只接收新增的那一条，然后在前端本地追加。
+      // 当工作区已经有很多条记录时，这能明显减少重复序列化和传输开销。
+      if (payload.item) {
+        setWorkspaceItems((current) => [...current, payload.item]);
+      } else {
+        await refreshWorkspace();
+      }
+      const addedWorkspaceNumber = payload.added_workspace_number ?? payload.item?.workspace_number ?? null;
       setSelectedWorkspaceNumber(addedWorkspaceNumber);
       setHighlightedWorkspaceNumber(addedWorkspaceNumber);
       resetCatalogSearch({ focus: true });

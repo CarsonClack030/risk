@@ -9,7 +9,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from risk_backend.exporters import build_xlsx
-from risk_backend.models.entities import ParameterRow, Pollutant, PollutantConcentration, SiteSelection
+from risk_backend.models.entities import (
+    ParameterRow,
+    Pollutant,
+    PollutantConcentration,
+    SelectedPollutant,
+    SiteSelection,
+)
 from risk_backend.repositories.auth import AuthRepository
 from risk_backend.repositories.catalog import CatalogRepository
 from risk_backend.repositories.database import RUNTIME_DB, ensure_database
@@ -320,12 +326,14 @@ class RiskBackend:
         - 工作区污染物总数
 
         这样前端首页的指标卡就能一次性拿到所需信息。
+        这里特意使用 count 查询，而不是把整张目录或整张工作区读出来，
+        因为健康检查是高频轻量接口，不适合做全量扫描。
         """
         return {
             "status": "ok",
             "database": str(Path(RUNTIME_DB)),
-            "catalog_count": len(self.catalog_repository.list_pollutants("")),
-            "workspace_count": len(self.workspace_repository.list_selected_pollutants()),
+            "catalog_count": self.catalog_repository.count_pollutants(),
+            "workspace_count": self.workspace_repository.count_selected_pollutants(),
         }
 
     def list_catalog(self, keyword: str) -> dict[str, object]:
@@ -339,14 +347,35 @@ class RiskBackend:
         return {"items": [serialize_selected(row) for row in rows], "total": len(rows)}
 
     def add_workspace_item(self, pollutant_id: int) -> dict[str, object]:
-        """把目录中的某个污染物加入工作区。"""
+        """把目录中的某个污染物加入工作区。
+
+        这里返回的是“新增项 + 总数”，而不是整张工作区。
+        这样当前端连续添加上百条污染物时，
+        就不会因为每次都回传整张工作区而产生明显性能损耗。
+        """
         pollutant = self.catalog_repository.get_pollutant(pollutant_id)
         if pollutant is None:
             raise ValueError("未找到对应污染物")
         workspace_number = self.workspace_repository.add_pollutant(pollutant)
-        payload = self.list_workspace()
-        payload["added_workspace_number"] = workspace_number
-        return payload
+        item = SelectedPollutant(
+            workspace_number=workspace_number,
+            pollutant=pollutant,
+            concentration=PollutantConcentration(
+                workspace_number=workspace_number,
+                pollutant_id=pollutant.id,
+                name=pollutant.name,
+                english_name=pollutant.english_name,
+                surface_concentration=Decimal("0"),
+                lower_soil_concentration=Decimal("0"),
+                groundwater_concentration=Decimal("0"),
+                groundwater_protection_concentration=Decimal("0"),
+            ),
+        )
+        return {
+            "item": serialize_selected(item),
+            "added_workspace_number": workspace_number,
+            "total": self.workspace_repository.count_selected_pollutants(),
+        }
 
     def remove_workspace_item(self, workspace_number: int) -> dict[str, object]:
         """移除工作区中的一行。"""

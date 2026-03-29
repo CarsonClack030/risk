@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 from risk_backend.models.entities import Pollutant, PollutantConcentration, SelectedPollutant, to_decimal
 from risk_backend.repositories.database import connect
 
@@ -98,6 +96,12 @@ class WorkspaceRepository:
                 )
             )
         return selected
+
+    def count_selected_pollutants(self) -> int:
+        """统计当前工作区污染物条目数。"""
+        with connect() as con:
+            row = con.execute("select count(*) as total from db_pol_temp").fetchone()
+        return int(row["total"] if row else 0)
 
     def add_pollutant(self, pollutant: Pollutant) -> int:
         """把一个污染物加入工作区，并返回新生成的工作区序号。
