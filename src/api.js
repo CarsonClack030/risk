@@ -96,10 +96,20 @@ export const api = {
   health: () => request("/api/health"),
   listCatalog: (keyword = "") => request(`/api/catalog${qs({ keyword })}`),
   listWorkspace: () => request("/api/workspace"),
+  downloadWorkspaceImportTemplate: () => request("/api/workspace/import-template"),
   addWorkspaceItem: (pollutantId) =>
     request("/api/workspace/add", {
       method: "POST",
       body: JSON.stringify({ pollutant_id: pollutantId }),
+    }),
+  importWorkspaceExcel: (file) =>
+    request("/api/workspace/import-excel", {
+      method: "POST",
+      body: file,
+      headers: {
+        "Content-Type":
+          file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      },
     }),
   removeWorkspaceItem: (workspaceNumber) =>
     request(`/api/workspace/${workspaceNumber}`, { method: "DELETE" }),

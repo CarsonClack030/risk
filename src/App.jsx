@@ -73,11 +73,11 @@ function App() {
   // 启动与全局反馈状态
   // ------------------------
   // booting: 首次启动遮罩是否显示
-  // error:  顶部错误横幅
-  // notice: 顶部成功/失败提示
+  // errorMessage: 错误弹窗文案
+  // notice: 顶部成功提示
   // health: 后端健康检查及数据库统计
   const [booting, setBooting] = useState(true);
-  const [error, setError] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState(null);
   const [health, setHealth] = useState(null);
 
@@ -157,6 +157,7 @@ function App() {
   // 用于在成功加入工作区后，把光标重新送回搜索框，
   // 这样用户可以连续录入多个污染物。
   const catalogInputRef = useRef(null);
+  const workspaceImportInputRef = useRef(null);
 
   // useDeferredValue 可以把“用户输入”和“真正触发查询”稍微错开。
   // 好处是：用户快速敲字时，界面不会因为每个字符都立即请求后端而发抖。
@@ -169,6 +170,7 @@ function App() {
   const selectedWorkspaceItem =
     workspaceItems.find((item) => item.workspace_number === selectedWorkspaceNumber) || null;
   const selectedAdminItem = adminItems.find((item) => item.id === selectedAdminId) || null;
+  const allPathwaysSelected = PATHWAYS.every((item) => pathways[item.key]);
 
   // 顶部 notice 横幅显示一段时间后自动消失。
   useEffect(() => {
@@ -210,7 +212,7 @@ function App() {
         setBooting(false);
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError.message);
+          setErrorMessage(loadError.message);
           setBooting(false);
         }
       }
@@ -306,8 +308,12 @@ function App() {
     throw lastError;
   }
 
-  // 统一弹横幅通知。
+  // 成功继续用顶部绿色横幅；错误则改成弹窗提醒。
   function flash(kind, text) {
+    if (kind === "error") {
+      setErrorMessage(text);
+      return;
+    }
     setNotice({ kind, text });
   }
 
@@ -446,6 +452,27 @@ function App() {
     await addCatalogItemToWorkspace(selectedCatalogItem);
   }
 
+  // 打开系统文件选择器，让用户挑选一个 xlsx 文件。
+  function openWorkspaceImport() {
+    workspaceImportInputRef.current?.click();
+  }
+
+  // 下载 Excel 导入模板，帮助用户直接按系统要求整理列名和示例。
+  async function handleDownloadImportTemplate() {
+    try {
+      const blob = await api.downloadWorkspaceImportTemplate();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "污染物导入模板.xlsx";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      flash("success", "导入模板已下载");
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
+  }
+
   // 点击表格行时，仅同步选中状态，不直接写工作区。
   function selectCatalogItem(item) {
     syncCatalogSelection(item);
@@ -521,6 +548,38 @@ function App() {
       await refreshResults();
       flash("success", "已移除选中的工作区污染物");
       setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
+  }
+
+  // 从 Excel 批量导入工作区。
+  // 导入规则会尽量贴近真实业务整理习惯：
+  // - 至少提供“编号 / 污染物名称 / 英文名”其中之一
+  // - 四类浓度列允许留空，留空会按 0 处理
+  // - 导入成功后，前端直接把新增条目追加进本地工作区状态
+  async function handleWorkspaceExcelImport(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      flash("error", "当前仅支持导入 .xlsx 文件");
+      return;
+    }
+    try {
+      const payload = await api.importWorkspaceExcel(file);
+      if (payload.items?.length) {
+        setWorkspaceItems((current) => [...current, ...payload.items]);
+      } else {
+        await refreshWorkspace();
+      }
+      const lastImported = payload.items?.[payload.items.length - 1]?.workspace_number ?? null;
+      setSelectedWorkspaceNumber(lastImported);
+      setHighlightedWorkspaceNumber(lastImported);
+      setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
+      flash("success", `已从 Excel 导入 ${payload.imported || payload.items?.length || 0} 条污染物`);
     } catch (loadError) {
       flash("error", loadError.message);
     }
@@ -734,6 +793,11 @@ function App() {
     }
   }
 
+  // 一键勾选全部暴露途径。
+  function handleSelectAllPathways() {
+    setPathways(Object.fromEntries(PATHWAYS.map((item) => [item.key, true])));
+  }
+
   // ------------------------
   // 下面开始构造表格显示数据
   // ------------------------
@@ -833,7 +897,6 @@ function App() {
         </div>
       </header>
 
-      {error ? <section className="banner error-banner">{error}</section> : null}
       {notice ? <section className={`banner ${notice.kind}-banner`}>{notice.text}</section> : null}
 
       {/* 指标卡区：帮助用户快速确认当前运行状态。 */}
@@ -864,66 +927,80 @@ function App() {
         />
       </section>
 
-      {/* 控制区：标准、用地类型、暴露途径都属于“计算前条件”。 */}
-      <section className="control-panel">
-        <div className="control-card">
-          <span>用地类型</span>
-          <div className="segmented">
-            <button
-              className={areaType === "I" ? "segment active" : "segment"}
-              onClick={() => setAreaType("I")}
-              type="button"
-            >
-              第一类用地
-            </button>
-            <button
-              className={areaType === "II" ? "segment active" : "segment"}
-              onClick={() => setAreaType("II")}
-              type="button"
-            >
-              第二类用地
-            </button>
-          </div>
-        </div>
-
-        <div className="control-card">
-          <span>适用标准</span>
-          <div className="segmented">
-            <button
-              className={standard === "G" ? "segment active" : "segment"}
-              onClick={() => setStandard("G")}
-              type="button"
-            >
-              国家标准
-            </button>
-            <button
-              className={standard === "Z" ? "segment active" : "segment"}
-              onClick={() => setStandard("Z")}
-              type="button"
-            >
-              浙江标准
-            </button>
-          </div>
-        </div>
-
-        <div className="control-card wide">
-          <span>暴露途径</span>
-          <div className="chip-grid">
-            {PATHWAYS.map((item) => (
+      {/* 控制区：把暴露途径单独放到第二排，避免长标签和上面的两个选择区挤在一起。 */}
+      <section className="control-stack">
+        <div className="control-panel control-panel-top">
+          <div className="control-card">
+            <span>用地类型</span>
+            <div className="segmented">
               <button
-                key={item.key}
-                className={pathways[item.key] ? "chip active" : "chip"}
-                onClick={() =>
-                  setPathways((current) => ({
-                    ...current,
-                    [item.key]: !current[item.key],
-                  }))
-                }
+                className={areaType === "I" ? "segment active" : "segment"}
+                onClick={() => setAreaType("I")}
                 type="button"
               >
-                {item.label}
+                第一类用地
               </button>
-            ))}
+              <button
+                className={areaType === "II" ? "segment active" : "segment"}
+                onClick={() => setAreaType("II")}
+                type="button"
+              >
+                第二类用地
+              </button>
+            </div>
+          </div>
+
+          <div className="control-card">
+            <span>适用标准</span>
+            <div className="segmented">
+              <button
+                className={standard === "G" ? "segment active" : "segment"}
+                onClick={() => setStandard("G")}
+                type="button"
+              >
+                国家标准
+              </button>
+              <button
+                className={standard === "Z" ? "segment active" : "segment"}
+                onClick={() => setStandard("Z")}
+                type="button"
+              >
+                浙江标准
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="control-panel control-panel-bottom">
+          <div className="control-card control-card-full">
+            <div className="control-card-head">
+              <span>暴露途径</span>
+              <button
+                className="ghost-button compact-button"
+                disabled={allPathwaysSelected}
+                onClick={handleSelectAllPathways}
+                type="button"
+              >
+                {allPathwaysSelected ? "已全选" : "全选"}
+              </button>
+            </div>
+            <div className="chip-grid">
+              {PATHWAYS.map((item) => (
+                <button
+                  key={item.key}
+                  className={pathways[item.key] ? "chip active" : "chip"}
+                  onClick={() =>
+                    setPathways((current) => ({
+                      ...current,
+                      [item.key]: !current[item.key],
+                    }))
+                  }
+                  type="button"
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </section>
@@ -1027,14 +1104,23 @@ function App() {
               <h2>工作区污染物</h2>
               <p>
                 {workspaceItems.length
-                  ? `当前已选 ${workspaceItems.length} 个污染物，可继续编辑浓度或直接计算。`
-                  : "工作区还没有污染物。先从左侧目录加入至少一项。"}
+                  ? `当前已选 ${workspaceItems.length} 个污染物，可继续编辑浓度、导入 Excel 或直接计算。`
+                  : "工作区还没有污染物。先从左侧目录加入，或直接导入一份 Excel。"}
               </p>
             </div>
             <button className="ghost-button" onClick={refreshWorkspace} type="button">
               同步
             </button>
           </div>
+          <input
+            ref={workspaceImportInputRef}
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            hidden
+            type="file"
+            onChange={(event) => {
+              void handleWorkspaceExcelImport(event);
+            }}
+          />
           <DataTable
             headers={WORKSPACE_HEADERS}
             rows={workspaceRows}
@@ -1044,7 +1130,17 @@ function App() {
             onSelect={setSelectedWorkspaceNumber}
             emptyText="工作区为空"
           />
+          <p className="panel-note">
+            支持导入 <strong>.xlsx</strong>；至少填写“编号 / 污染物名称 / 英文名”其中之一，浓度列留空按
+            0 处理；模板示例行即使保留，导入时也会自动忽略。
+          </p>
           <div className="panel-footer">
+            <button className="ghost-button" onClick={handleDownloadImportTemplate} type="button">
+              下载模板
+            </button>
+            <button className="secondary-button" onClick={openWorkspaceImport} type="button">
+              Excel 导入
+            </button>
             <button className="ghost-button" onClick={openConcentrationModal} type="button">
               编辑浓度
             </button>
@@ -1077,6 +1173,22 @@ function App() {
           </button>
         </div>
       </footer>
+
+      {errorMessage ? (
+        <Modal
+          title="操作失败"
+          subtitle="请根据提示检查当前输入、工作区或导入文件。"
+          size="sm"
+          onClose={() => setErrorMessage("")}
+          actions={
+            <button className="primary-button" onClick={() => setErrorMessage("")} type="button">
+              知道了
+            </button>
+          }
+        >
+          <div className="error-modal-copy">{errorMessage}</div>
+        </Modal>
+      ) : null}
 
       {/* 参数弹窗：编辑原有四组参数模板。 */}
       {parameterModalOpen ? (

@@ -199,7 +199,21 @@ table {
   background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.46);
   box-shadow: 0 14px 36px rgba(18, 31, 39, 0.08);
+}
+
+.control-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   margin-bottom: 18px;
+}
+
+.control-panel-top {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.control-panel-bottom {
+  grid-template-columns: 1fr;
 }
 
 .control-card {
@@ -212,10 +226,27 @@ table {
   border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
+.control-card-full {
+  width: 100%;
+}
+
+.control-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .control-card span,
 .panel-head p,
 .modal-header p {
   color: var(--muted);
+}
+
+.compact-button {
+  padding: 8px 12px;
+  border-radius: 999px;
 }
 
 .segmented {
@@ -424,6 +455,13 @@ table {
   align-items: baseline;
 }
 
+.panel-note {
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 .panel-footer {
   justify-content: flex-end;
 }
@@ -609,6 +647,15 @@ table {
   background: rgba(219, 244, 239, 0.94);
   border-color: rgba(17, 119, 110, 0.16);
   color: #0a5a53;
+}
+
+.error-modal-copy {
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(253, 228, 220, 0.88);
+  border: 1px solid rgba(180, 74, 42, 0.16);
+  color: #813118;
+  line-height: 1.65;
 }
 
 .modal-backdrop {

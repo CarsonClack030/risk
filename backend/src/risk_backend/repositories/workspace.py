@@ -103,6 +103,67 @@ class WorkspaceRepository:
             row = con.execute("select count(*) as total from db_pol_temp").fetchone()
         return int(row["total"] if row else 0)
 
+    def _insert_workspace_row(
+        self,
+        con,
+        pollutant: Pollutant,
+        *,
+        surface_concentration=0.0,
+        lower_soil_concentration=0.0,
+        groundwater_concentration=0.0,
+        groundwater_protection_concentration=0.0,
+    ) -> SelectedPollutant:
+        """在一个已有连接中插入单条工作区记录。
+
+        这个内部方法同时服务于：
+        - 普通单条加入
+        - Excel 批量导入
+
+        两者的主要区别只在“浓度值来自哪里”，插入逻辑本身是同一套。
+        """
+        cursor = con.execute(
+            "insert into db_pol_temp (ID, p_name, e_name) values (?, ?, ?)",
+            (pollutant.id, pollutant.name, pollutant.english_name),
+        )
+        workspace_number = int(cursor.lastrowid)
+        con.execute(
+            """
+            insert into db_pol_con (
+                number, ID, p_name, e_name, Surface_con, Lower_soil_con, Groundwater_con, Groundwater_pro_con
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workspace_number,
+                pollutant.id,
+                pollutant.name,
+                pollutant.english_name,
+                float(surface_concentration),
+                float(lower_soil_concentration),
+                float(groundwater_concentration),
+                float(groundwater_protection_concentration),
+            ),
+        )
+        for table in RESULT_TABLES:
+            con.execute(
+                f"insert into {table} (number, ID, p_name, e_name) values (?, ?, ?, ?)",
+                (workspace_number, pollutant.id, pollutant.name, pollutant.english_name),
+            )
+        concentration = PollutantConcentration(
+            workspace_number=workspace_number,
+            pollutant_id=pollutant.id,
+            name=pollutant.name,
+            english_name=pollutant.english_name,
+            surface_concentration=to_decimal(surface_concentration),
+            lower_soil_concentration=to_decimal(lower_soil_concentration),
+            groundwater_concentration=to_decimal(groundwater_concentration),
+            groundwater_protection_concentration=to_decimal(groundwater_protection_concentration),
+        )
+        return SelectedPollutant(
+            workspace_number=workspace_number,
+            pollutant=pollutant,
+            concentration=concentration,
+        )
+
     def add_pollutant(self, pollutant: Pollutant) -> int:
         """把一个污染物加入工作区，并返回新生成的工作区序号。
 
@@ -116,25 +177,32 @@ class WorkspaceRepository:
         - 自动滚动到新增位置
         """
         with connect() as con:
-            cursor = con.execute(
-                "insert into db_pol_temp (ID, p_name, e_name) values (?, ?, ?)",
-                (pollutant.id, pollutant.name, pollutant.english_name),
-            )
-            workspace_number = cursor.lastrowid
-            con.execute(
-                """
-                insert into db_pol_con (
-                    number, ID, p_name, e_name, Surface_con, Lower_soil_con, Groundwater_con, Groundwater_pro_con
-                ) values (?, ?, ?, ?, 0.0, 0.0, 0.0, 0.0)
-                """,
-                (workspace_number, pollutant.id, pollutant.name, pollutant.english_name),
-            )
-            for table in RESULT_TABLES:
-                con.execute(
-                    f"insert into {table} (number, ID, p_name, e_name) values (?, ?, ?, ?)",
-                    (workspace_number, pollutant.id, pollutant.name, pollutant.english_name),
+            item = self._insert_workspace_row(con, pollutant)
+        return item.workspace_number
+
+    def import_pollutants(
+        self,
+        entries: list[dict[str, object]],
+    ) -> list[SelectedPollutant]:
+        """批量导入工作区污染物及浓度。
+
+        Excel 导入的核心目标是“少开连接、少做往返”。
+        因此这里把多条记录放进同一事务里一次性写完。
+        """
+        imported: list[SelectedPollutant] = []
+        with connect() as con:
+            for entry in entries:
+                imported.append(
+                    self._insert_workspace_row(
+                        con,
+                        entry["pollutant"],
+                        surface_concentration=entry["surface_concentration"],
+                        lower_soil_concentration=entry["lower_soil_concentration"],
+                        groundwater_concentration=entry["groundwater_concentration"],
+                        groundwater_protection_concentration=entry["groundwater_protection_concentration"],
+                    )
                 )
-        return int(workspace_number)
+        return imported
 
     def remove_workspace_row(self, workspace_number: int) -> None:
         """删除工作区中的某一行。

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from risk_backend.exporters import build_xlsx
 from risk_backend.models.entities import (
@@ -23,6 +23,7 @@ from risk_backend.repositories.parameters import PARAMETER_GROUPS, ParameterRepo
 from risk_backend.repositories.results import ResultRepository
 from risk_backend.repositories.workspace import WorkspaceRepository
 from risk_backend.services.calculator import RiskCalculator
+from risk_backend.xlsx import load_xlsx_rows
 
 
 # 这里是 Python 后端的“HTTP 门面层”。
@@ -188,6 +189,74 @@ POLLUTANT_FIELDS = (
     "id", "name", "english_name", "henry", "da", "dw", "koc", "solubility",
     "sfo", "iur", "rfdo", "rfc", "absgi", "absd", "saf", "kp",
 )
+
+# Excel 导入表头支持“一个字段多个别名”。
+# 这样用户不必严格照搬某个模板，只要列名语义接近即可识别。
+EXCEL_COLUMN_ALIASES = {
+    "pollutant_id": ("编号", "污染物编号", "污染物id", "id", "number", "pollutant_id"),
+    "name": ("污染物名称", "名称", "name", "p_name"),
+    "english_name": ("英文名", "英文名称", "english_name", "e_name"),
+    "surface_concentration": ("地表浓度", "表层土壤浓度", "surface_concentration"),
+    "lower_soil_concentration": ("下层土壤浓度", "lower_soil_concentration"),
+    "groundwater_concentration": ("地下水浓度", "groundwater_concentration"),
+    "groundwater_protection_concentration": (
+        "地下水保护浓度",
+        "保护地下水浓度",
+        "groundwater_protection_concentration",
+    ),
+}
+EXCEL_IDENTIFIER_FIELDS = ("pollutant_id", "name", "english_name")
+EXCEL_CONCENTRATION_FIELDS = (
+    "surface_concentration",
+    "lower_soil_concentration",
+    "groundwater_concentration",
+    "groundwater_protection_concentration",
+)
+EXCEL_REQUIRED_IDENTIFIER_TEXT = "编号、污染物名称、英文名"
+WORKSPACE_IMPORT_TEMPLATE_HEADERS = (
+    "编号",
+    "污染物名称",
+    "英文名",
+    "地表浓度",
+    "下层土壤浓度",
+    "地下水浓度",
+    "地下水保护浓度",
+)
+WORKSPACE_IMPORT_TEMPLATE_NOTICE = (
+    "使用说明：支持上传 .xlsx；至少填写“编号 / 污染物名称 / 英文名”其中之一；"
+    "四类浓度留空按 0 处理；模板示例行可保留，导入时会自动忽略。"
+)
+WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_MARKER = "模板示例（保留也会自动忽略）"
+WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_ROW = (
+    WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_MARKER,
+    "苯",
+    "Benzene",
+    "1.25",
+    "2.50",
+    "0",
+    "4.75",
+)
+
+
+def _normalize_header(text: str) -> str:
+    """把 Excel 表头归一化，方便做别名匹配。
+
+    例如：
+    - `英文 名`
+    - `english_name`
+    - `English-Name`
+
+    这些在归一化后都会更容易映射到同一个业务字段。
+    """
+    raw = str(text or "").strip().lower()
+    return "".join(char for char in raw if char not in " \t\r\n_-()[]{}（）【】")
+
+
+NORMALIZED_EXCEL_ALIAS_MAP = {
+    _normalize_header(alias): field
+    for field, aliases in EXCEL_COLUMN_ALIASES.items()
+    for alias in aliases
+}
 
 
 def _json_value(value):
@@ -377,6 +446,91 @@ class RiskBackend:
             "total": self.workspace_repository.count_selected_pollutants(),
         }
 
+    def import_workspace_excel(self, content: bytes) -> dict[str, object]:
+        """从 Excel 中批量导入污染物和浓度。
+
+        这条链路服务的业务场景是：
+        - 用户已经在外部 Excel 里整理好了污染物清单
+        - 希望一次性把“污染物 + 四类浓度”直接带进工作区
+
+        这里故意只支持 `.xlsx`，并且采用项目内置的轻量解析器，
+        目的是避免为了一个导入功能重新引入更重的第三方库。
+        """
+        if not content:
+            raise ValueError("上传的 Excel 文件为空")
+
+        rows = load_xlsx_rows(content)
+        header_row_index, column_map = self._parse_excel_columns(rows)
+        imported_entries: list[dict[str, object]] = []
+        errors: list[str] = []
+
+        for row_number, row in enumerate(rows[header_row_index + 1 :], start=header_row_index + 2):
+            if self._is_excel_example_row(row):
+                continue
+            if not any(str(cell).strip() for cell in row):
+                continue
+            try:
+                pollutant = self._resolve_excel_pollutant(column_map, row, row_number)
+                imported_entries.append(
+                    {
+                        "pollutant": pollutant,
+                        "surface_concentration": self._parse_excel_decimal(
+                            self._excel_cell(row, column_map, "surface_concentration"),
+                            "地表浓度",
+                            row_number,
+                        ),
+                        "lower_soil_concentration": self._parse_excel_decimal(
+                            self._excel_cell(row, column_map, "lower_soil_concentration"),
+                            "下层土壤浓度",
+                            row_number,
+                        ),
+                        "groundwater_concentration": self._parse_excel_decimal(
+                            self._excel_cell(row, column_map, "groundwater_concentration"),
+                            "地下水浓度",
+                            row_number,
+                        ),
+                        "groundwater_protection_concentration": self._parse_excel_decimal(
+                            self._excel_cell(row, column_map, "groundwater_protection_concentration"),
+                            "地下水保护浓度",
+                            row_number,
+                        ),
+                    }
+                )
+            except ValueError as exc:
+                errors.append(f"第 {row_number} 行：{exc}")
+
+        if errors:
+            more = "；其余错误请修正后重试" if len(errors) > 5 else ""
+            raise ValueError("Excel 导入失败：" + "；".join(errors[:5]) + more)
+        if not imported_entries:
+            raise ValueError("Excel 中没有可导入的数据行")
+
+        imported_items = self.workspace_repository.import_pollutants(imported_entries)
+        return {
+            "items": [serialize_selected(item) for item in imported_items],
+            "imported": len(imported_items),
+            "total": self.workspace_repository.count_selected_pollutants(),
+        }
+
+    def export_workspace_import_template(self) -> bytes:
+        """导出工作区 Excel 导入模板。
+
+        模板里会直接带上：
+        - 一行使用说明
+        - 一行正式表头
+        - 一行示例数据
+
+        这样用户下载后基本不需要猜字段格式，照着填就能导入。
+        """
+        return build_xlsx(
+            [
+                [WORKSPACE_IMPORT_TEMPLATE_NOTICE],
+                list(WORKSPACE_IMPORT_TEMPLATE_HEADERS),
+                list(WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_ROW),
+                [],
+            ]
+        )
+
     def remove_workspace_item(self, workspace_number: int) -> dict[str, object]:
         """移除工作区中的一行。"""
         self.workspace_repository.remove_workspace_row(workspace_number)
@@ -537,6 +691,119 @@ class RiskBackend:
             kp=Decimal(str(payload.get("kp", 0))),
         )
 
+    def _parse_excel_columns(self, rows: list[list[str]]) -> tuple[int, dict[str, int]]:
+        """从 Excel 中识别表头，并映射成后端字段名。
+
+        返回值中的第一个数字是“表头所在行的 0 基索引”。
+        这样既便于代码里继续切片，又能通过 `+ 1` 很容易换算回用户看到的 Excel 行号。
+        """
+        for row_index, row in enumerate(rows):
+            row_number = row_index + 1
+            normalized_headers = {
+                NORMALIZED_EXCEL_ALIAS_MAP[_normalize_header(cell)]: index
+                for index, cell in enumerate(row)
+                if _normalize_header(cell) in NORMALIZED_EXCEL_ALIAS_MAP
+            }
+            if not normalized_headers:
+                continue
+            if not any(field in normalized_headers for field in EXCEL_IDENTIFIER_FIELDS):
+                raise ValueError(f"第 {row_number} 行缺少标识列，至少需要 {EXCEL_REQUIRED_IDENTIFIER_TEXT} 之一")
+            return row_index, normalized_headers
+        raise ValueError(f"未识别到可用表头，至少需要 {EXCEL_REQUIRED_IDENTIFIER_TEXT} 之一")
+
+    def _excel_cell(self, row: list[str], column_map: dict[str, int], field: str) -> str:
+        """安全读取 Excel 某一列的文本值。"""
+        column_index = column_map.get(field)
+        if column_index is None or column_index >= len(row):
+            return ""
+        return str(row[column_index]).strip()
+
+    def _is_excel_example_row(self, row: list[str]) -> bool:
+        """判断当前行是否为模板自带的示例行。
+
+        用户拿着模板直接录入时，最常见的误操作之一是：
+        “忘了删除示例行”。
+
+        这里主动做一次识别，可以让示例继续保留在文件里，
+        又不会被真的导入到工作区。
+        """
+        return any(str(cell).strip() == WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_MARKER for cell in row)
+
+    def _parse_excel_decimal(self, value: str, label: str, row_number: int) -> Decimal:
+        """把 Excel 中的浓度文本转成 Decimal。
+
+        浓度列留空会按 0 处理；
+        只有在用户明确填了非法文本时才报错。
+        """
+        if value == "":
+            return Decimal("0")
+        try:
+            return Decimal(str(value).replace(",", ""))
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"{label} 不是合法数字（当前值：{value}）") from None
+
+    def _parse_excel_pollutant_id(self, value: str) -> int | None:
+        """把 Excel 中的污染物编号解析为整数。
+
+        Excel 常把整数显示成 `23` 或 `23.0`，这里两种都接受。
+        """
+        if value == "":
+            return None
+        try:
+            parsed = Decimal(value)
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"污染物编号不是合法数字（当前值：{value}）") from None
+        if parsed != parsed.to_integral_value():
+            raise ValueError(f"污染物编号必须是整数（当前值：{value}）")
+        return int(parsed)
+
+    def _resolve_excel_pollutant(
+        self,
+        column_map: dict[str, int],
+        row: list[str],
+        row_number: int,
+    ) -> Pollutant:
+        """根据 Excel 行里的标识列找到目录中的污染物。
+
+        允许三种定位方式：
+        - 编号
+        - 中文名（支持一定程度的模糊匹配，例如“砷”匹配“砷（无机）”）
+        - 英文名
+
+        如果同时提供多种标识，但它们指向不同污染物，也会及时报错，
+        避免把错误数据悄悄导入工作区。
+        """
+        raw_id = self._excel_cell(row, column_map, "pollutant_id")
+        raw_name = self._excel_cell(row, column_map, "name")
+        raw_english_name = self._excel_cell(row, column_map, "english_name")
+
+        pollutant: Pollutant | None = None
+        pollutant_id = self._parse_excel_pollutant_id(raw_id)
+        if pollutant_id is not None:
+            pollutant = self.catalog_repository.get_pollutant(pollutant_id)
+            if pollutant is None:
+                raise ValueError(f"未找到编号为 {pollutant_id} 的污染物")
+
+        if raw_name:
+            by_name = self.catalog_repository.find_by_name(raw_name)
+            if by_name is None:
+                raise ValueError(f"未找到名称为“{raw_name}”的污染物")
+            if pollutant and pollutant.id != by_name.id:
+                raise ValueError("编号和污染物名称对应的不是同一条目录记录")
+            pollutant = by_name
+
+        if raw_english_name:
+            by_english_name = self.catalog_repository.find_by_english_name(raw_english_name)
+            if by_english_name is None:
+                raise ValueError(f"未找到英文名为“{raw_english_name}”的污染物")
+            if pollutant and pollutant.id != by_english_name.id:
+                raise ValueError("编号/名称和英文名对应的不是同一条目录记录")
+            pollutant = by_english_name
+
+        if pollutant is None:
+            raise ValueError(f"至少需要填写 {EXCEL_REQUIRED_IDENTIFIER_TEXT} 之一")
+        return pollutant
+
 
 class RequestHandler(BaseHTTPRequestHandler):
     """最薄的一层 HTTP 路由处理器。
@@ -571,6 +838,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/workspace":
                 self._send_json(self.backend.list_workspace())
                 return
+            if parsed.path == "/api/workspace/import-template":
+                self._send_binary(
+                    self.backend.export_workspace_import_template(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "污染物导入模板.xlsx",
+                )
+                return
             if parsed.path == "/api/parameters":
                 self._send_json(self.backend.list_parameters())
                 return
@@ -585,6 +859,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         """创建型或动作型接口。"""
         try:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/workspace/import-excel":
+                self._send_json(self.backend.import_workspace_excel(self._read_body()))
+                return
             payload = self._read_json()
             if parsed.path == "/api/workspace/add":
                 self._send_json(self.backend.add_workspace_item(int(payload["pollutant_id"])))
@@ -660,13 +937,21 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> dict[str, object]:
         """把请求体读成 JSON 对象。"""
-        content_length = int(self.headers.get("Content-Length", "0"))
-        if content_length == 0:
-            return {}
-        raw = self.rfile.read(content_length)
+        raw = self._read_body()
         if not raw:
             return {}
         return json.loads(raw.decode("utf-8"))
+
+    def _read_body(self) -> bytes:
+        """按原样读取请求体。
+
+        之所以单独抽出来，是因为现在除了 JSON 之外，
+        还新增了 Excel 二进制上传这类“原始字节流”场景。
+        """
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length == 0:
+            return b""
+        return self.rfile.read(content_length)
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         """发送 JSON 响应。"""
@@ -680,11 +965,16 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _send_binary(self, payload: bytes, content_type: str, filename: str) -> None:
         """发送二进制响应，用于 Excel 导出。"""
+        ascii_filename = filename.encode("ascii", "ignore").decode("ascii").strip() or "download.bin"
+        encoded_filename = quote(filename)
         self.send_response(HTTPStatus.OK)
         self._write_cors_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}",
+        )
         self.end_headers()
         self.wfile.write(payload)
 
