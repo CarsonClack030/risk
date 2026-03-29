@@ -126,6 +126,8 @@ fn main() {
         resolve_backend_port().expect("failed to reserve a localhost port for the backend");
     let backend_api_base = format!("http://127.0.0.1:{backend_port}");
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .manage(BackendState(Mutex::new(None)))
         .manage(BackendConfig {

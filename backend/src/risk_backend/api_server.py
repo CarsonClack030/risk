@@ -23,7 +23,7 @@ from risk_backend.repositories.parameters import PARAMETER_GROUPS, ParameterRepo
 from risk_backend.repositories.results import ResultRepository
 from risk_backend.repositories.workspace import WorkspaceRepository
 from risk_backend.services.calculator import RiskCalculator
-from risk_backend.xlsx import load_xlsx_rows
+from risk_backend.tabular_import import load_tabular_rows
 
 
 # 这里是 Python 后端的“HTTP 门面层”。
@@ -223,7 +223,7 @@ WORKSPACE_IMPORT_TEMPLATE_HEADERS = (
     "地下水保护浓度",
 )
 WORKSPACE_IMPORT_TEMPLATE_NOTICE = (
-    "使用说明：支持上传 .xlsx；至少填写“编号 / 污染物名称 / 英文名”其中之一；"
+    "使用说明：支持上传 .xlsx / .xls / .csv / .txt；至少填写“编号 / 污染物名称 / 英文名”其中之一；"
     "四类浓度留空按 0 处理；模板示例行可保留，导入时会自动忽略。"
 )
 WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_MARKER = "模板示例（保留也会自动忽略）"
@@ -446,20 +446,32 @@ class RiskBackend:
             "total": self.workspace_repository.count_selected_pollutants(),
         }
 
-    def import_workspace_excel(self, content: bytes) -> dict[str, object]:
-        """从 Excel 中批量导入污染物和浓度。
+    def import_workspace_file(
+        self,
+        content: bytes,
+        *,
+        filename: str = "",
+        content_type: str = "",
+    ) -> dict[str, object]:
+        """从表格文件中批量导入污染物和浓度。
 
         这条链路服务的业务场景是：
         - 用户已经在外部 Excel 里整理好了污染物清单
         - 希望一次性把“污染物 + 四类浓度”直接带进工作区
 
-        这里故意只支持 `.xlsx`，并且采用项目内置的轻量解析器，
-        目的是避免为了一个导入功能重新引入更重的第三方库。
+        当前支持：
+        - `.xlsx`
+        - `.xls`
+        - `.csv`
+        - `.txt`
+
+        其中 `.xlsx / .csv / .txt` 尽量使用轻量解析；
+        `.xls` 则通过 xlrd 兼容老格式。
         """
         if not content:
-            raise ValueError("上传的 Excel 文件为空")
+            raise ValueError("上传的文件为空")
 
-        rows = load_xlsx_rows(content)
+        rows = load_tabular_rows(content, filename=filename, content_type=content_type)
         header_row_index, column_map = self._parse_excel_columns(rows)
         imported_entries: list[dict[str, object]] = []
         errors: list[str] = []
@@ -501,7 +513,7 @@ class RiskBackend:
 
         if errors:
             more = "；其余错误请修正后重试" if len(errors) > 5 else ""
-            raise ValueError("Excel 导入失败：" + "；".join(errors[:5]) + more)
+            raise ValueError("文件导入失败：" + "；".join(errors[:5]) + more)
         if not imported_entries:
             raise ValueError("Excel 中没有可导入的数据行")
 
@@ -511,6 +523,16 @@ class RiskBackend:
             "imported": len(imported_items),
             "total": self.workspace_repository.count_selected_pollutants(),
         }
+
+    def import_workspace_excel(
+        self,
+        content: bytes,
+        *,
+        filename: str = "",
+        content_type: str = "",
+    ) -> dict[str, object]:
+        """兼容旧命名，内部转发到通用表格导入。"""
+        return self.import_workspace_file(content, filename=filename, content_type=content_type)
 
     def export_workspace_import_template(self) -> bytes:
         """导出工作区 Excel 导入模板。
@@ -859,8 +881,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         """创建型或动作型接口。"""
         try:
             parsed = urlparse(self.path)
+            params = parse_qs(parsed.query)
             if parsed.path == "/api/workspace/import-excel":
-                self._send_json(self.backend.import_workspace_excel(self._read_body()))
+                self._send_json(
+                    self.backend.import_workspace_file(
+                        self._read_body(),
+                        filename=_first_query(params, "filename"),
+                        content_type=self.headers.get("Content-Type", ""),
+                    )
+                )
+                return
+            if parsed.path == "/api/workspace/import-file":
+                self._send_json(
+                    self.backend.import_workspace_file(
+                        self._read_body(),
+                        filename=_first_query(params, "filename"),
+                        content_type=self.headers.get("Content-Type", ""),
+                    )
+                )
                 return
             payload = self._read_json()
             if parsed.path == "/api/workspace/add":

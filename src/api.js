@@ -8,7 +8,8 @@ import { invoke } from "@tauri-apps/api/core";
 // 1. 纯 Web 调试时，通过 Vite 环境变量或固定地址访问本地后端。
 // 2. Tauri 命令调用失败时，退回到默认本地地址。
 const FALLBACK_API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:38911";
-let resolvedApiBasePromise = null;
+let resolvedApiBase = null;
+let resolvingApiBasePromise = null;
 
 // 只有在 Tauri 桌面壳里，window 上才会注入内部运行时对象。
 // 这个判断用于区分“浏览器调试环境”和“桌面应用环境”。
@@ -22,24 +23,48 @@ function isTauriRuntime() {
 //    这样即使默认端口被占用，前端也能拿到自动回退后的实际端口。
 // 3. 如果以上都失败，再退回到默认本地地址。
 //
-// 这里用 Promise 做缓存，是为了避免每次请求都重复 invoke 一次 Tauri 命令。
-async function resolveApiBase() {
-  if (!resolvedApiBasePromise) {
-    resolvedApiBasePromise = (async () => {
-      if (import.meta.env.VITE_API_BASE) {
-        return import.meta.env.VITE_API_BASE;
-      }
-      if (isTauriRuntime()) {
-        try {
-          return await invoke("resolve_backend_api_base");
-        } catch (error) {
-          console.warn("Failed to resolve backend API base from Tauri, using fallback.", error);
-        }
-      }
-      return FALLBACK_API_BASE;
-    })();
+// 这里仍然做缓存，但只缓存“可靠拿到的结果”：
+// - 显式配置的 VITE_API_BASE
+// - Tauri 命令成功返回的真实地址
+// - 非 Tauri 环境下的固定 fallback
+//
+// 如果 Tauri 命令偶发失败，就先临时退回 fallback，
+// 但不会把这个 fallback 永久缓存死。
+// 这样后续请求还有机会重新拿到真正的动态端口。
+async function resolveApiBase({ force = false } = {}) {
+  if (!force && resolvedApiBase) {
+    return resolvedApiBase;
   }
-  return resolvedApiBasePromise;
+  if (!force && resolvingApiBasePromise) {
+    return resolvingApiBasePromise;
+  }
+
+  resolvingApiBasePromise = (async () => {
+    if (import.meta.env.VITE_API_BASE) {
+      resolvedApiBase = import.meta.env.VITE_API_BASE;
+      return resolvedApiBase;
+    }
+
+    if (isTauriRuntime()) {
+      try {
+        const apiBase = await invoke("resolve_backend_api_base");
+        resolvedApiBase = apiBase;
+        return apiBase;
+      } catch (error) {
+        console.warn("Failed to resolve backend API base from Tauri, using fallback.", error);
+        return FALLBACK_API_BASE;
+      }
+    }
+
+    resolvedApiBase = FALLBACK_API_BASE;
+    return resolvedApiBase;
+  })();
+
+  try {
+    return await resolvingApiBasePromise;
+  } finally {
+    resolvingApiBasePromise = null;
+  }
 }
 
 // 统一的请求封装：
@@ -47,8 +72,7 @@ async function resolveApiBase() {
 // - 自动补 JSON 头
 // - 自动把后端错误转换为前端可读的 Error
 // - 自动区分 JSON 响应和二进制响应（例如 Excel 导出）
-async function request(path, options = {}) {
-  const apiBase = await resolveApiBase();
+async function performRequest(apiBase, path, options = {}) {
   const response = await fetch(`${apiBase}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -73,6 +97,23 @@ async function request(path, options = {}) {
     return response.json();
   }
   return response.blob();
+}
+
+async function request(path, options = {}) {
+  const apiBase = await resolveApiBase();
+  try {
+    return await performRequest(apiBase, path, options);
+  } catch (error) {
+    // 如果最初拿到的是 fallback 地址，或者动态端口解析失败过，
+    // 就再强制问一次 Rust 壳，看看是否能拿到真正的后端端口。
+    if (isTauriRuntime() && error instanceof TypeError) {
+      const refreshedApiBase = await resolveApiBase({ force: true });
+      if (refreshedApiBase !== apiBase) {
+        return performRequest(refreshedApiBase, path, options);
+      }
+    }
+    throw error;
+  }
 }
 
 // 把查询参数对象转成 URL 上的 ?a=1&b=2 形式。
@@ -102,13 +143,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ pollutant_id: pollutantId }),
     }),
-  importWorkspaceExcel: (file) =>
-    request("/api/workspace/import-excel", {
+  importWorkspaceFile: (file) =>
+    request(`/api/workspace/import-file${qs({ filename: file.name })}`, {
       method: "POST",
       body: file,
       headers: {
-        "Content-Type":
-          file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Type": file.type || "application/octet-stream",
       },
     }),
   removeWorkspaceItem: (workspaceNumber) =>

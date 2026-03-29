@@ -310,17 +310,17 @@ risk_tauri/
 - 地下水浓度
 - 地下水保护浓度
 
-#### 第 3.5 步：通过 Excel 批量导入污染物和浓度
+#### 第 3.5 步：通过表格文件批量导入污染物和浓度
 
 前端位置：
 
-- `src/App.jsx -> handleWorkspaceExcelImport()`
-- `src/api.js -> importWorkspaceExcel()`
+- `src/App.jsx -> handleWorkspaceFileImport()`
+- `src/api.js -> importWorkspaceFile()`
 
 后端链路：
 
-- `api_server.py -> import_workspace_excel()`
-- `xlsx.py -> load_xlsx_rows()`
+- `api_server.py -> import_workspace_file()`
+- `tabular_import.py -> load_tabular_rows()`
 - `WorkspaceRepository.import_pollutants()`
 
 模板下载：
@@ -330,8 +330,8 @@ risk_tauri/
 
 支持格式：
 
-- 当前只支持 `.xlsx`
-- 默认读取第一张工作表
+- 支持 `.xlsx`、`.xls`、`.csv`、`.txt`
+- Excel 文件默认读取第一张工作表
 - 至少提供以下三类标识列之一：
   - `编号`
   - `污染物名称`
@@ -350,11 +350,12 @@ risk_tauri/
 - 模板自带的示例行即使没有删除，导入时也会自动忽略
 - 后端会在同一事务里批量写入工作区、浓度表和结果表占位行
 
-为什么专门写了一个 `xlsx.py`：
+为什么这里拆成 `xlsx.py + tabular_import.py`：
 
-- 不需要为了导入功能引入 `pandas`、`openpyxl`
+- `.xlsx / .csv / .txt` 不需要为了导入功能引入 `pandas`、`openpyxl`
+- `.xls` 通过更轻量的 `xlrd` 兼容旧格式
 - 打包体积更小
-- 教学上也更容易看懂“Excel 本质上就是一个 zip + XML”
+- 教学上也更容易看懂“不同文件格式最后都先归一成二维表数据，再进入工作区导入主链”
 
 #### 第 4 步：开始计算
 

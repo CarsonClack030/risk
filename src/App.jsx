@@ -1,4 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { api } from "./api";
 import { Modal, MetricCard, DataTable } from "./components";
 import {
@@ -22,6 +24,7 @@ import {
 // - components.jsx 提供“可复用家具”
 // - App.jsx 则像“总协调人”，负责让所有环节按顺序运转。
 const CATALOG_DISPLAY_LIMIT = 20;
+const WORKSPACE_IMPORT_EXTENSIONS = [".xlsx", ".xls", ".csv", ".txt"];
 
 // 深拷贝工具：
 // 参数弹窗、浓度弹窗里编辑的是“草稿数据”，不能直接改原始状态，
@@ -66,6 +69,22 @@ function summarizePathways(pathways) {
 // 因此这里用一个轻量工具把业务对象转成表格行。
 function toRows(items, mapper) {
   return items.map(mapper);
+}
+
+function isTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function hasSupportedImportExtension(filename) {
+  const lower = String(filename || "").toLowerCase();
+  return WORKSPACE_IMPORT_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+
+function normalizeLoadError(error) {
+  if (error?.message === "Load failed") {
+    return new Error("后端启动稍慢或连接暂时失败，请稍后再试一次。");
+  }
+  return error;
 }
 
 function App() {
@@ -212,7 +231,7 @@ function App() {
         setBooting(false);
       } catch (loadError) {
         if (!cancelled) {
-          setErrorMessage(loadError.message);
+          setErrorMessage(normalizeLoadError(loadError).message);
           setBooting(false);
         }
       }
@@ -297,12 +316,12 @@ function App() {
   // Tauri 前端通常启动比 Python sidecar 稍快，这个等待过程很常见。
   async function waitForHealth() {
     let lastError = new Error("后端尚未启动");
-    for (let index = 0; index < 24; index += 1) {
+    for (let index = 0; index < 60; index += 1) {
       try {
         return await api.health();
       } catch (healthError) {
-        lastError = healthError;
-        await new Promise((resolve) => window.setTimeout(resolve, 450));
+        lastError = normalizeLoadError(healthError);
+        await new Promise((resolve) => window.setTimeout(resolve, index < 10 ? 350 : 500));
       }
     }
     throw lastError;
@@ -452,21 +471,38 @@ function App() {
     await addCatalogItemToWorkspace(selectedCatalogItem);
   }
 
-  // 打开系统文件选择器，让用户挑选一个 xlsx 文件。
+  // 打开系统文件选择器，让用户挑选一个表格文件。
   function openWorkspaceImport() {
     workspaceImportInputRef.current?.click();
   }
 
-  // 下载 Excel 导入模板，帮助用户直接按系统要求整理列名和示例。
+  // 下载导入模板（默认导出为 xlsx），帮助用户直接按系统要求整理列名和示例。
   async function handleDownloadImportTemplate() {
     try {
       const blob = await api.downloadWorkspaceImportTemplate();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "污染物导入模板.xlsx";
-      anchor.click();
-      URL.revokeObjectURL(url);
+      if (isTauriRuntime()) {
+        const targetPath = await save({
+          defaultPath: "污染物导入模板.xlsx",
+          filters: [
+            {
+              name: "Excel 文件",
+              extensions: ["xlsx"],
+            },
+          ],
+        });
+        if (!targetPath) {
+          return;
+        }
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        await writeFile(targetPath, bytes);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = "污染物导入模板.xlsx";
+        anchor.click();
+        URL.revokeObjectURL(url);
+      }
       flash("success", "导入模板已下载");
     } catch (loadError) {
       flash("error", loadError.message);
@@ -553,23 +589,23 @@ function App() {
     }
   }
 
-  // 从 Excel 批量导入工作区。
+  // 从表格文件批量导入工作区。
   // 导入规则会尽量贴近真实业务整理习惯：
   // - 至少提供“编号 / 污染物名称 / 英文名”其中之一
   // - 四类浓度列允许留空，留空会按 0 处理
   // - 导入成功后，前端直接把新增条目追加进本地工作区状态
-  async function handleWorkspaceExcelImport(event) {
+  async function handleWorkspaceFileImport(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) {
       return;
     }
-    if (!file.name.toLowerCase().endsWith(".xlsx")) {
-      flash("error", "当前仅支持导入 .xlsx 文件");
+    if (!hasSupportedImportExtension(file.name)) {
+      flash("error", "当前仅支持导入 .xlsx、.xls、.csv、.txt 文件");
       return;
     }
     try {
-      const payload = await api.importWorkspaceExcel(file);
+      const payload = await api.importWorkspaceFile(file);
       if (payload.items?.length) {
         setWorkspaceItems((current) => [...current, ...payload.items]);
       } else {
@@ -579,7 +615,7 @@ function App() {
       setSelectedWorkspaceNumber(lastImported);
       setHighlightedWorkspaceNumber(lastImported);
       setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
-      flash("success", `已从 Excel 导入 ${payload.imported || payload.items?.length || 0} 条污染物`);
+      flash("success", `已导入 ${payload.imported || payload.items?.length || 0} 条污染物`);
     } catch (loadError) {
       flash("error", loadError.message);
     }
@@ -1104,8 +1140,8 @@ function App() {
               <h2>工作区污染物</h2>
               <p>
                 {workspaceItems.length
-                  ? `当前已选 ${workspaceItems.length} 个污染物，可继续编辑浓度、导入 Excel 或直接计算。`
-                  : "工作区还没有污染物。先从左侧目录加入，或直接导入一份 Excel。"}
+                  ? `当前已选 ${workspaceItems.length} 个污染物，可继续编辑浓度、导入文件或直接计算。`
+                  : "工作区还没有污染物。先从左侧目录加入，或直接导入一份表格文件。"}
               </p>
             </div>
             <button className="ghost-button" onClick={refreshWorkspace} type="button">
@@ -1114,11 +1150,11 @@ function App() {
           </div>
           <input
             ref={workspaceImportInputRef}
-            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".xlsx,.xls,.csv,.txt,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain"
             hidden
             type="file"
             onChange={(event) => {
-              void handleWorkspaceExcelImport(event);
+              void handleWorkspaceFileImport(event);
             }}
           />
           <DataTable
@@ -1131,15 +1167,15 @@ function App() {
             emptyText="工作区为空"
           />
           <p className="panel-note">
-            支持导入 <strong>.xlsx</strong>；至少填写“编号 / 污染物名称 / 英文名”其中之一，浓度列留空按
-            0 处理；模板示例行即使保留，导入时也会自动忽略。
+            支持导入 <strong>.xlsx / .xls / .csv / .txt</strong>；至少填写“编号 / 污染物名称 / 英文名”
+            其中之一，浓度列留空按 0 处理；模板示例行即使保留，导入时也会自动忽略。
           </p>
           <div className="panel-footer">
             <button className="ghost-button" onClick={handleDownloadImportTemplate} type="button">
               下载模板
             </button>
             <button className="secondary-button" onClick={openWorkspaceImport} type="button">
-              Excel 导入
+              文件导入
             </button>
             <button className="ghost-button" onClick={openConcentrationModal} type="button">
               编辑浓度

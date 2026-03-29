@@ -54,6 +54,13 @@ python3 -m pip install -r backend/requirements-build.txt
 python3 backend/build_sidecar.py
 ```
 
+当前工作区文件导入支持：
+
+- `.xlsx`
+- `.xls`
+- `.csv`
+- `.txt`
+
 生成物默认位于 `backend/bin/`，文件名会自动带上目标三元组，例如：
 
 ```text
