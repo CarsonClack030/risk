@@ -69,8 +69,12 @@ export function DataTable({
       <table className="data-table">
         <thead>
           <tr>
-            {headers.map((header) => (
-              <th key={header}>{header}</th>
+            {headers.map((header, index) => (
+              // 部分结果表在同一行里有两个都叫“合计”的列。
+              // 如果只用列名作为 React key，切换结果标签时 React 会把同名表头
+              // 误认为同一个节点，导致旧的“合计”残留到风险控制值表中。
+              // 加上列序号后，每一列都有稳定且唯一的身份。
+              <th key={`${index}-${header}`}>{header}</th>
             ))}
           </tr>
         </thead>

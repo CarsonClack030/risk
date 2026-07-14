@@ -129,6 +129,25 @@ table {
   max-width: 20ch;
 }
 
+.hero-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.version-badge {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+  color: rgba(248, 255, 253, 0.88);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .hero-copy {
   margin: 14px 0 0;
   max-width: 48ch;
@@ -518,6 +537,12 @@ table {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+  transform: none;
+}
+
 .ghost-button.danger {
   color: var(--danger);
   background: var(--danger-soft);
@@ -656,6 +681,62 @@ table {
   border: 1px solid rgba(180, 74, 42, 0.16);
   color: #813118;
   line-height: 1.65;
+}
+
+.update-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.version-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.version-comparison > div {
+  padding: 15px 16px;
+  border: 1px solid rgba(17, 119, 110, 0.12);
+  border-radius: 16px;
+  background: rgba(219, 244, 239, 0.66);
+}
+
+.version-comparison span,
+.version-comparison strong {
+  display: block;
+}
+
+.version-comparison span {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.version-comparison strong {
+  color: var(--accent-strong);
+  font-size: 1.2rem;
+}
+
+.update-release-name {
+  margin: 0;
+  font-weight: 700;
+}
+
+.update-notes {
+  max-height: 180px;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.update-notes.muted,
+.update-card small {
+  color: var(--muted);
 }
 
 .modal-backdrop {

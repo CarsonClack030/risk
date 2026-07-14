@@ -214,7 +214,7 @@ EXCEL_CONCENTRATION_FIELDS = (
 )
 EXCEL_REQUIRED_IDENTIFIER_TEXT = "编号、污染物名称、英文名"
 WORKSPACE_IMPORT_TEMPLATE_HEADERS = (
-    "编号",
+    "污染物编号",
     "污染物名称",
     "英文名",
     "地表浓度",
@@ -223,7 +223,7 @@ WORKSPACE_IMPORT_TEMPLATE_HEADERS = (
     "地下水保护浓度",
 )
 WORKSPACE_IMPORT_TEMPLATE_NOTICE = (
-    "使用说明：支持上传 .xlsx / .xls / .csv / .txt；至少填写“编号 / 污染物名称 / 英文名”其中之一；"
+    "使用说明：支持上传 .xlsx / .xls / .csv / .txt；至少填写“污染物编号 / 污染物名称 / 英文名”其中之一；"
     "四类浓度留空按 0 处理；模板示例行可保留，导入时会自动忽略。"
 )
 WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_MARKER = "模板示例（保留也会自动忽略）"
@@ -599,22 +599,55 @@ class RiskBackend:
         return self.list_parameters()
 
     def save_parameters(self, groups: list[dict[str, object]]) -> dict[str, object]:
-        """保存参数弹窗中的所有组。"""
+        """校验并保存参数弹窗中的所有组。
+
+        校验发生在写数据库之前，因此只要任意标准/用地组合不合法，
+        本次保存就整体取消，不会留下“前几组已保存、后几组失败”的半成品状态。
+        """
+        parsed_rows: list[ParameterRow] = []
         for group in groups:
-            rows = [
-                ParameterRow(
-                    name=str(row["name"]),
-                    label=str(row.get("label", row["name"])),
-                    data_gi=Decimal(str(row.get("data_gi", 0))),
-                    data_gii=Decimal(str(row.get("data_gii", 0))),
-                    data_zi=Decimal(str(row.get("data_zi", 0))),
-                    data_zii=Decimal(str(row.get("data_zii", 0))),
-                    group_id=int(group["id"]),
+            for row in group.get("rows", []):
+                name = str(row["name"])
+                label = str(row.get("label", name))
+                parsed_rows.append(
+                    ParameterRow(
+                        name=name,
+                        label=label,
+                        data_gi=self._parse_parameter_decimal(row.get("data_gi"), label, "国家标准·第一类用地"),
+                        data_gii=self._parse_parameter_decimal(row.get("data_gii"), label, "国家标准·第二类用地"),
+                        data_zi=self._parse_parameter_decimal(row.get("data_zi"), label, "浙江标准·第一类用地"),
+                        data_zii=self._parse_parameter_decimal(row.get("data_zii"), label, "浙江标准·第二类用地"),
+                        group_id=int(group["id"]),
+                    )
                 )
-                for row in group.get("rows", [])
-            ]
+
+        # 兼容局部 API 更新：先读取当前值，再用本次提交的行覆盖并校验。
+        for standard, area_type in (("G", "I"), ("G", "II"), ("Z", "I"), ("Z", "II")):
+            selection = SiteSelection(standard=standard, area_type=area_type)
+            values = self.parameter_repository.get_parameter_map(selection)
+            attribute_name = selection.db_column.lower()
+            for row in parsed_rows:
+                values[row.name] = getattr(row, attribute_name)
+            self.calculator.validate_parameters(selection, values)
+
+        rows_by_group: dict[int, list[ParameterRow]] = {}
+        for row in parsed_rows:
+            rows_by_group.setdefault(row.group_id, []).append(row)
+        for rows in rows_by_group.values():
             self.parameter_repository.save_group_rows(rows)
         return self.list_parameters()
+
+    def _parse_parameter_decimal(self, value: object, label: str, column_label: str) -> Decimal:
+        """把参数输入转换为有限 Decimal，并生成用户可读错误。"""
+        if value in (None, ""):
+            raise ValueError(f"参数“{label}”在{column_label}中不能为空")
+        try:
+            parsed = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            raise ValueError(f"参数“{label}”在{column_label}中不是合法数字：{value}") from None
+        if not parsed.is_finite():
+            raise ValueError(f"参数“{label}”在{column_label}中必须是有限数字：{value}")
+        return parsed
 
     def calculate(self, payload: dict[str, object]) -> dict[str, object]:
         """执行风险计算主流程。
@@ -789,7 +822,7 @@ class RiskBackend:
 
         允许三种定位方式：
         - 编号
-        - 中文名（支持一定程度的模糊匹配，例如“砷”匹配“砷（无机）”）
+        - 中文名（支持括号说明、全半角标点和顺反式位置差异的模糊匹配）
         - 英文名
 
         如果同时提供多种标识，但它们指向不同污染物，也会及时报错，

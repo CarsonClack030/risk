@@ -1,6 +1,4 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import { api } from "./api";
 import { Modal, MetricCard, DataTable } from "./components";
 import {
@@ -11,6 +9,20 @@ import {
   POLLUTANT_FORM_FIELDS,
   WORKSPACE_HEADERS,
 } from "./constants";
+import {
+  filenameFromPath,
+  hasSupportedImportExtension,
+  importContentType,
+  isTauriRuntime,
+  pickWorkspaceImportFile,
+  saveExcelBlob,
+} from "./fileTransfers";
+import {
+  checkForUpdates,
+  getCurrentAppVersion,
+  openReleasePage,
+  PACKAGE_VERSION,
+} from "./updateService";
 
 // App 是整个前端的主控组件。
 // 这个文件同时承担了几件事：
@@ -24,7 +36,6 @@ import {
 // - components.jsx 提供“可复用家具”
 // - App.jsx 则像“总协调人”，负责让所有环节按顺序运转。
 const CATALOG_DISPLAY_LIMIT = 20;
-const WORKSPACE_IMPORT_EXTENSIONS = [".xlsx", ".xls", ".csv", ".txt"];
 
 // 深拷贝工具：
 // 参数弹窗、浓度弹窗里编辑的是“草稿数据”，不能直接改原始状态，
@@ -71,15 +82,6 @@ function toRows(items, mapper) {
   return items.map(mapper);
 }
 
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-function hasSupportedImportExtension(filename) {
-  const lower = String(filename || "").toLowerCase();
-  return WORKSPACE_IMPORT_EXTENSIONS.some((extension) => lower.endsWith(extension));
-}
-
 function normalizeLoadError(error) {
   if (error?.message === "Load failed") {
     return new Error("后端启动稍慢或连接暂时失败，请稍后再试一次。");
@@ -99,6 +101,10 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState(null);
   const [health, setHealth] = useState(null);
+  // 版本号由 Tauri 打包配置提供；更新信息只在用户主动检查后保存。
+  const [appVersion, setAppVersion] = useState(PACKAGE_VERSION);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState(null);
 
   // ------------------------
   // 目录搜索相关状态
@@ -190,6 +196,19 @@ function App() {
     workspaceItems.find((item) => item.workspace_number === selectedWorkspaceNumber) || null;
   const selectedAdminItem = adminItems.find((item) => item.id === selectedAdminId) || null;
   const allPathwaysSelected = PATHWAYS.every((item) => pathways[item.key]);
+
+  // 桌面运行时读取安装包中的真实版本，浏览器调试时使用开发版本回退值。
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentAppVersion().then((version) => {
+      if (!cancelled) {
+        setAppVersion(version);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 顶部 notice 横幅显示一段时间后自动消失。
   useEffect(() => {
@@ -336,6 +355,46 @@ function App() {
     setNotice({ kind, text });
   }
 
+  // 用户主动点击后才访问 GitHub，避免软件启动时产生不必要的网络请求。
+  // 只有发现更高的正式版本时才弹出下载确认窗口。
+  async function handleCheckForUpdates() {
+    if (checkingUpdate) {
+      return;
+    }
+    setCheckingUpdate(true);
+    try {
+      const update = await checkForUpdates(appVersion);
+      if (update.status === "available") {
+        setAvailableUpdate(update);
+      } else if (update.status === "current") {
+        flash("success", `当前已是最新版本 v${appVersion}`);
+      } else if (update.status === "ahead") {
+        flash("success", `当前版本 v${appVersion} 高于 GitHub 已发布版本`);
+      } else {
+        flash(
+          "success",
+          "GitHub 暂无可读取的正式 Release，请确认仓库已公开并完成版本发布。",
+        );
+      }
+    } catch (loadError) {
+      flash("error", loadError.message);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  // 用户在确认弹窗中选择下载后，再把 Release 页面交给系统默认浏览器。
+  // 页面中可同时放置 Windows 与 macOS 安装包，让用户自行选择正确平台。
+  async function handleOpenUpdatePage() {
+    try {
+      await openReleasePage(availableUpdate.releaseUrl);
+      setAvailableUpdate(null);
+      flash("success", "已打开 GitHub 下载页面");
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
+  }
+
   // 让搜索框重新拿到焦点，用于连续录入。
   function focusCatalogInput() {
     window.setTimeout(() => {
@@ -471,39 +530,38 @@ function App() {
     await addCatalogItemToWorkspace(selectedCatalogItem);
   }
 
-  // 打开系统文件选择器，让用户挑选一个表格文件。
-  function openWorkspaceImport() {
-    workspaceImportInputRef.current?.click();
+  // 打开系统文件选择器，让用户自己定位要导入的表格文件。
+  // Tauri 桌面版直接读取所选路径；纯浏览器调试时回退到隐藏的 file input。
+  async function openWorkspaceImport() {
+    if (!isTauriRuntime()) {
+      workspaceImportInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const selectedFile = await pickWorkspaceImportFile();
+      if (!selectedFile) {
+        return;
+      }
+      await importWorkspaceSource(
+        selectedFile.filename,
+        selectedFile.content,
+        selectedFile.contentType,
+      );
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
   }
 
   // 下载导入模板（默认导出为 xlsx），帮助用户直接按系统要求整理列名和示例。
   async function handleDownloadImportTemplate() {
     try {
       const blob = await api.downloadWorkspaceImportTemplate();
-      if (isTauriRuntime()) {
-        const targetPath = await save({
-          defaultPath: "污染物导入模板.xlsx",
-          filters: [
-            {
-              name: "Excel 文件",
-              extensions: ["xlsx"],
-            },
-          ],
-        });
-        if (!targetPath) {
-          return;
-        }
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        await writeFile(targetPath, bytes);
-      } else {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = "污染物导入模板.xlsx";
-        anchor.click();
-        URL.revokeObjectURL(url);
+      const savedPath = await saveExcelBlob(blob, "污染物导入模板.xlsx");
+      if (!savedPath) {
+        return;
       }
-      flash("success", "导入模板已下载");
+      flash("success", `导入模板已保存：${filenameFromPath(savedPath)}`);
     } catch (loadError) {
       flash("error", loadError.message);
     }
@@ -594,28 +652,34 @@ function App() {
   // - 至少提供“编号 / 污染物名称 / 英文名”其中之一
   // - 四类浓度列允许留空，留空会按 0 处理
   // - 导入成功后，前端直接把新增条目追加进本地工作区状态
+  async function importWorkspaceSource(filename, content, contentType) {
+    if (!hasSupportedImportExtension(filename)) {
+      flash("error", "当前仅支持导入 .xlsx、.xls、.csv、.txt 文件");
+      return;
+    }
+    const payload = await api.importWorkspaceFile(filename, content, contentType);
+    if (payload.items?.length) {
+      setWorkspaceItems((current) => [...current, ...payload.items]);
+    } else {
+      await refreshWorkspace();
+    }
+    const lastImported = payload.items?.[payload.items.length - 1]?.workspace_number ?? null;
+    setSelectedWorkspaceNumber(lastImported);
+    setHighlightedWorkspaceNumber(lastImported);
+    setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
+    flash("success", `已从 ${filename} 导入 ${payload.imported || payload.items?.length || 0} 条污染物`);
+  }
+
+  // 浏览器调试模式的文件输入回调。桌面应用不会走这里，
+  // 但保留它能让前端脱离 Tauri 时仍可独立联调后端。
   async function handleWorkspaceFileImport(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) {
       return;
     }
-    if (!hasSupportedImportExtension(file.name)) {
-      flash("error", "当前仅支持导入 .xlsx、.xls、.csv、.txt 文件");
-      return;
-    }
     try {
-      const payload = await api.importWorkspaceFile(file);
-      if (payload.items?.length) {
-        setWorkspaceItems((current) => [...current, ...payload.items]);
-      } else {
-        await refreshWorkspace();
-      }
-      const lastImported = payload.items?.[payload.items.length - 1]?.workspace_number ?? null;
-      setSelectedWorkspaceNumber(lastImported);
-      setHighlightedWorkspaceNumber(lastImported);
-      setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
-      flash("success", `已导入 ${payload.imported || payload.items?.length || 0} 条污染物`);
+      await importWorkspaceSource(file.name, file, file.type || importContentType(file.name));
     } catch (loadError) {
       flash("error", loadError.message);
     }
@@ -724,18 +788,16 @@ function App() {
     }
   }
 
-  // 导出结果表为 Excel。
-  // 后端返回的是二进制 Blob，前端临时创建一个下载链接来触发保存。
+  // 导出结果表为 Excel。后端负责生成内容，前端负责弹出“另存为”窗口，
+  // 文件只有在用户选定的位置写入成功后，才提示导出完成。
   async function handleExportResults() {
     try {
       const blob = await api.exportResults();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "风险评估结果.xlsx";
-      anchor.click();
-      URL.revokeObjectURL(url);
-      flash("success", "结果文件已生成");
+      const savedPath = await saveExcelBlob(blob, "风险评估结果.xlsx");
+      if (!savedPath) {
+        return;
+      }
+      flash("success", `结果文件已保存：${filenameFromPath(savedPath)}`);
     } catch (loadError) {
       flash("error", loadError.message);
     }
@@ -917,10 +979,21 @@ function App() {
 
       {/* 顶部标题区：保留了桌面工作台常用的“标题 + 快捷操作”结构。 */}
       <header className="hero-panel">
-        <div>
+        <div className="hero-title-row">
           <h1>污染场地风险评估系统</h1>
+          <span className="version-badge" title="当前软件版本">
+            v{appVersion}
+          </span>
         </div>
         <div className="hero-actions">
+          <button
+            className="ghost-button"
+            disabled={checkingUpdate}
+            onClick={handleCheckForUpdates}
+            type="button"
+          >
+            {checkingUpdate ? "检查中..." : "检查更新"}
+          </button>
           <button className="ghost-button" onClick={openParameterModal} type="button">
             参数设置
           </button>
@@ -1172,9 +1245,9 @@ function App() {
           </p>
           <div className="panel-footer">
             <button className="ghost-button" onClick={handleDownloadImportTemplate} type="button">
-              下载模板
+              保存模板
             </button>
-            <button className="secondary-button" onClick={openWorkspaceImport} type="button">
+            <button className="secondary-button" onClick={() => void openWorkspaceImport()} type="button">
               文件导入
             </button>
             <button className="ghost-button" onClick={openConcentrationModal} type="button">
@@ -1209,6 +1282,45 @@ function App() {
           </button>
         </div>
       </footer>
+
+      {availableUpdate ? (
+        <Modal
+          title="发现新版本"
+          subtitle="是否前往 GitHub 下载新版本安装包？"
+          size="sm"
+          onClose={() => setAvailableUpdate(null)}
+          actions={
+            <>
+              <button className="ghost-button" onClick={() => setAvailableUpdate(null)} type="button">
+                暂不下载
+              </button>
+              <button className="primary-button" onClick={handleOpenUpdatePage} type="button">
+                前往下载
+              </button>
+            </>
+          }
+        >
+          <div className="update-card">
+            <div className="version-comparison">
+              <div>
+                <span>当前版本</span>
+                <strong>v{availableUpdate.currentVersion}</strong>
+              </div>
+              <div>
+                <span>最新版本</span>
+                <strong>v{availableUpdate.latestVersion}</strong>
+              </div>
+            </div>
+            <p className="update-release-name">{availableUpdate.releaseName}</p>
+            {availableUpdate.releaseNotes ? (
+              <div className="update-notes">{availableUpdate.releaseNotes}</div>
+            ) : (
+              <div className="update-notes muted">本次发布暂未填写更新说明。</div>
+            )}
+            <small>确认后将使用系统默认浏览器打开 GitHub Release 页面。</small>
+          </div>
+        </Modal>
+      ) : null}
 
       {errorMessage ? (
         <Modal
@@ -1406,6 +1518,9 @@ function App() {
           </div>
           {activeResult ? (
             <DataTable
+              // 每张结果表的列结构不同。key 变化时重新建立表格，
+              // 避免 React 在标签切换时复用上一张表的表头节点。
+              key={activeResult.key}
               headers={activeResult.headers}
               rows={activeResult.rows.map((row, index) => ({
                 key: `${activeResult.key}-${index}`,

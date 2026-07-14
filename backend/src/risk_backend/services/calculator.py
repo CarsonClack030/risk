@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
-from types import SimpleNamespace
 
 from risk_backend.models.entities import AttributeMap, SelectedPollutant, SiteSelection, ZERO, to_decimal
 from risk_backend.repositories.parameters import ParameterRepository
@@ -22,6 +21,54 @@ PATHWAY_FLAGS = {
     "iov1": "xiwaibiaotu",
     "iov2": "xiwaixiatu",
     "iiv1": "xineixiatu",
+}
+
+# 这些参数会直接出现在分母、对数或迁移公式中，必须严格大于 0。
+# 字典值同时作为用户可读的报错名称，避免只显示难懂的英文符号。
+POSITIVE_PARAMETER_LABELS = {
+    "A": "污染源区面积",
+    "Ab": "室内地板面积",
+    "ACR": "单一污染物可接受致癌风险",
+    "AHQ": "单一污染物可接受危害熵",
+    "ATca": "致癌效应平均时间",
+    "ATnc": "非致癌效应平均时间",
+    "BWa": "成人平均体重",
+    "DAIRa": "成人每日空气呼吸量",
+    "Delta_air": "混合区高度",
+    "Delta_gw": "地下水混合区厚度",
+    "Eit": "地基和墙体裂隙表面积所占面积",
+    "ER": "室内空气交换速率",
+    "I": "土壤中水的入渗速率",
+    "LB": "室内空间体积与气态污染物入渗面积之比",
+    "Lcrack": "室内地基厚度",
+    "Lgw": "地下水埋深",
+    "LS": "下层污染土壤层埋深",
+    "Rho_b": "土壤容重",
+    "Rho_s": "土壤颗粒密度",
+    "Tau": "气态污染物入侵持续时间",
+    "Uair": "混合区大气流速",
+    "Ugw": "地下水达西速率",
+    "W": "污染源区宽度",
+    "X_crack": "室内地板周长",
+    "Z_crack": "室内地面到地板底部厚度",
+}
+
+# 比例参数必须位于 0 到 1 之间。这里保留 0 和 1 两个边界，
+# 因为部分路径允许“不吸收”或“全部分配”这类极端但有效的配置。
+UNIT_INTERVAL_PARAMETER_LABELS = {
+    "ABSo": "经口摄入吸收因子",
+    "Eit": "地基和墙体裂隙表面积所占面积",
+    "fspi": "室内土壤颗粒物比例",
+    "fspo": "室外土壤颗粒物比例",
+    "PIAF": "吸入颗粒物体内滞留比例",
+    "Pws": "土壤含水率",
+    "SERa": "成人暴露皮肤面积比",
+    "SERc": "儿童暴露皮肤面积比",
+    "Theta_acap": "毛细管层孔隙空气体积比",
+    "Theta_acrack": "地基裂隙空气体积比",
+    "Theta_wcap": "毛细管层孔隙水体积比",
+    "Theta_wcrack": "地基裂隙水体积比",
+    "WAF": "地下水参考剂量分配比例",
 }
 
 
@@ -56,11 +103,108 @@ class RiskCalculator:
         返回值第一层 key 是 workspace_number，
         这样即使同一个污染物被加入多次，也能分别保存结果。
         """
-        parameters = AttributeMap(self.parameter_repository.get_parameter_map(selection))
+        parameter_values = self.parameter_repository.get_parameter_map(selection)
+        self.validate_parameters(selection, parameter_values)
+        parameters = AttributeMap(parameter_values)
         return {
             item.workspace_number: self._calculate_single(selection, parameters, item, pathway_flags)
             for item in selected_pollutants
         }
+
+    def validate_parameters(self, selection: SiteSelection, values: dict[str, Decimal]) -> None:
+        """在进入公式前校验参数的数值范围和组合关系。
+
+        单个参数即使看起来是数字，组合后也可能破坏公式定义域。例如土壤含水率
+        过大时，`总孔隙率 - 充水孔隙率` 会成为负数，随后进行 3.33 次方就会触发
+        `Decimal.InvalidOperation`。这里把底层数学异常提前翻译成可操作的中文提示。
+        """
+        errors: list[str] = []
+        finite_values: dict[str, Decimal] = {}
+
+        for name, raw_value in values.items():
+            value = raw_value if isinstance(raw_value, Decimal) else to_decimal(raw_value)
+            if not value.is_finite():
+                errors.append(f"参数 {name}={value} 不是有限数字")
+                continue
+            finite_values[name] = value
+
+            label = POSITIVE_PARAMETER_LABELS.get(
+                name,
+                UNIT_INTERVAL_PARAMETER_LABELS.get(name, name),
+            )
+            if name in POSITIVE_PARAMETER_LABELS:
+                if value <= ZERO:
+                    errors.append(f"{label}（{name}）必须大于 0，当前为 {value}")
+            elif value < ZERO:
+                errors.append(f"{label}（{name}）不能小于 0，当前为 {value}")
+
+            if name in UNIT_INTERVAL_PARAMETER_LABELS and value > 1:
+                ratio_label = UNIT_INTERVAL_PARAMETER_LABELS[name]
+                errors.append(f"{ratio_label}（{name}）必须在 0 到 1 之间，当前为 {value}")
+
+        # 第一类用地公式包含儿童暴露量，儿童体重会直接作为分母。
+        bwc = finite_values.get("BWc")
+        if selection.area_type == "I" and bwc is not None and bwc <= ZERO:
+            errors.append(f"儿童平均体重（BWc）在第一类用地中必须大于 0，当前为 {bwc}")
+
+        rho_b = finite_values.get("Rho_b")
+        rho_s = finite_values.get("Rho_s")
+        pws = finite_values.get("Pws")
+        if rho_b is not None and rho_s is not None and pws is not None and rho_s > ZERO:
+            total_porosity = Decimal("1") - rho_b / rho_s
+            air_porosity = total_porosity - rho_b * pws
+            if total_porosity <= ZERO:
+                errors.append(
+                    f"土壤容重 Rho_b={rho_b} 必须小于土壤颗粒密度 Rho_s={rho_s}"
+                )
+            elif air_porosity < ZERO:
+                errors.append(
+                    "土壤含水率与密度组合导致土壤空气孔隙率小于 0："
+                    f"Rho_b={rho_b}，Rho_s={rho_s}，Pws={pws}，计算值={air_porosity}"
+                )
+
+        for air_name, water_name, label in (
+            ("Theta_acap", "Theta_wcap", "毛细管层总孔隙体积比"),
+            ("Theta_acrack", "Theta_wcrack", "地基裂隙总孔隙体积比"),
+        ):
+            air_value = finite_values.get(air_name)
+            water_value = finite_values.get(water_name)
+            if air_value is None or water_value is None:
+                continue
+            total = air_value + water_value
+            if total <= ZERO or total > 1:
+                errors.append(
+                    f"{label}必须大于 0 且不超过 1："
+                    f"{air_name}={air_value}，{water_name}={water_value}，合计={total}"
+                )
+
+        hcap = finite_values.get("hcap")
+        hv = finite_values.get("hv")
+        if hcap is not None and hv is not None and hcap + hv <= ZERO:
+            errors.append(f"毛细管层厚度 hcap={hcap} 与非饱和土层厚度 hv={hv} 不能同时为 0")
+
+        # 建筑物气体入侵公式包含该比值的自然对数；比值等于 1 时分母为 0。
+        log_names = ("Z_crack", "X_crack", "Ab", "Eit")
+        if all(name in finite_values and finite_values[name] > ZERO for name in log_names):
+            log_argument = (
+                2 * finite_values["Z_crack"] * finite_values["X_crack"]
+                / (finite_values["Ab"] * finite_values["Eit"])
+            )
+            if log_argument == 1:
+                errors.append(
+                    "建筑物参数使气体入侵公式的对数分母为 0："
+                    "2×Z_crack×X_crack 不能等于 Ab×Eit"
+                )
+
+        if errors:
+            standard_label = "国家标准" if selection.standard == "G" else "浙江标准"
+            area_label = "第一类用地" if selection.area_type == "I" else "第二类用地"
+            details = "；".join(errors[:5])
+            more = "；还有其他参数错误，请逐项修正" if len(errors) > 5 else ""
+            raise ValueError(
+                f"参数校验失败（{standard_label} · {area_label}）：{details}{more}。"
+                "请修改参数或使用“恢复默认”。"
+            )
 
     def _calculate_single(
         self,

@@ -88,12 +88,15 @@ class ParameterRepository:
         后续会在 calculator.py 中被包装成 AttributeMap，
         方便以 `par.BWa` 的方式读取。
         """
-        rows: dict[str, object] = {}
+        placeholders = ", ".join("?" for _name in PARAMETER_NAMES)
         with connect() as con:
-            for name in PARAMETER_NAMES:
-                row = con.execute(
-                    f"select {selection.db_column} as value from db_pol_area_par_temp where name = ?",
-                    (name,),
-                ).fetchone()
-                rows[name] = to_decimal(row["value"] if row else None)
-        return rows
+            database_rows = con.execute(
+                f"""
+                select name, {selection.db_column} as value
+                from db_pol_area_par_temp
+                where name in ({placeholders})
+                """,
+                PARAMETER_NAMES,
+            ).fetchall()
+        values = {row["name"]: to_decimal(row["value"]) for row in database_rows}
+        return {name: values.get(name, to_decimal(None)) for name in PARAMETER_NAMES}

@@ -143,12 +143,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ pollutant_id: pollutantId }),
     }),
-  importWorkspaceFile: (file) =>
-    request(`/api/workspace/import-file${qs({ filename: file.name })}`, {
+  // 文件内容可能来自浏览器 File，也可能来自 Tauri readFile 返回的 Uint8Array。
+  // 显式传入文件名和内容后，两种运行环境可以复用同一个上传接口。
+  importWorkspaceFile: (filename, content, contentType = "application/octet-stream") =>
+    request(`/api/workspace/import-file${qs({ filename })}`, {
       method: "POST",
-      body: file,
+      body: content,
       headers: {
-        "Content-Type": file.type || "application/octet-stream",
+        "Content-Type": contentType,
       },
     }),
   removeWorkspaceItem: (workspaceNumber) =>

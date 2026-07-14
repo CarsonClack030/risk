@@ -42,8 +42,12 @@ risk_tauri/
 │   ├── api.js                        # 前端请求封装
 │   ├── components.jsx                # 通用组件
 │   ├── constants.js                  # 表头、路径、表单字段等静态配置
+│   ├── fileTransfers.js              # 系统文件选择、读取与另存为
 │   ├── main.jsx                      # React 入口
-│   └── styles.css                    # 页面样式
+│   ├── styles.css                    # 页面样式
+│   ├── updateService.js              # GitHub Release 更新检查与下载页打开
+│   ├── versioning.js                 # 纯 JavaScript 版本比较规则
+│   └── versioning.test.js            # 版本比较单元测试
 ├── backend/
 │   ├── main.py                       # Python 启动入口
 │   ├── build_sidecar.py              # 打包 sidecar 的脚本
@@ -94,6 +98,9 @@ risk_tauri/
 - 启动 Python 后端
 - 处理端口冲突
 - 在前端和后端之间传递真实 API 地址
+
+桌面壳还通过 `tauri-plugin-opener` 安全地打开 GitHub Release 页面。能力配置只允许
+访问本项目的 Release 地址，不会给前端开放任意外部程序或任意网址。
 
 ### 3.3 接口层：Python HTTP Server
 
@@ -314,8 +321,17 @@ risk_tauri/
 
 前端位置：
 
+- `src/App.jsx -> openWorkspaceImport()`
 - `src/App.jsx -> handleWorkspaceFileImport()`
+- `src/fileTransfers.js -> pickWorkspaceImportFile()`
 - `src/api.js -> importWorkspaceFile()`
+
+桌面版点击“文件导入”后，Tauri 的系统文件选择器会让用户自行定位源文件。
+前端通过 `readFile()` 读取所选文件，再把“文件名 + 二进制内容 + MIME 类型”交给统一接口。
+`handleWorkspaceFileImport()` 只作为纯浏览器调试模式的兼容入口。
+
+`src-tauri/capabilities/default.json` 只开放 `readFile/writeFile` 命令本身；真正可访问的路径仍由
+系统文件选择窗口临时加入安全范围，因此应用不能绕过用户选择去任意读写磁盘文件。
 
 后端链路：
 
@@ -326,7 +342,11 @@ risk_tauri/
 模板下载：
 
 - `src/App.jsx -> handleDownloadImportTemplate()`
+- `src/fileTransfers.js -> saveExcelBlob()`
 - `api_server.py -> export_workspace_import_template()`
+
+模板不会再直接写入默认下载目录。桌面版先显示系统“另存为”窗口，用户选定文件名和目录后，
+前端才通过 `writeFile()` 写入；如果用户取消窗口，则不写文件，也不显示成功提示。
 
 支持格式：
 
@@ -345,7 +365,10 @@ risk_tauri/
 导入规则：
 
 - 标识列可以混用，但如果编号/名称/英文名指向的不是同一条污染物，会直接报错
-- 中文名支持一定程度的模糊匹配，例如 Excel 里写 `砷`，也能命中数据库中的 `砷（无机）`
+- 中文名支持模糊匹配，例如 Excel 里写 `砷`，能命中数据库中的 `砷（无机）`
+- 名称匹配会统一中英文标点、连字符和顺反式标记位置；例如 `顺式12二氯乙烯`、
+  `12顺式二氯乙烯` 和 `顺式-1，2二氯乙烯` 都能命中 `1,2-顺式-二氯乙烯`
+- “顺式”和“反式”标记会保留在匹配键中，系统不会把两种异构体混为一条记录
 - 浓度列允许留空，留空按 `0` 处理
 - 模板自带的示例行即使没有删除，导入时也会自动忽略
 - 后端会在同一事务里批量写入工作区、浓度表和结果表占位行
@@ -373,10 +396,15 @@ risk_tauri/
 
 - `api_server.py -> calculate()`
 - `RiskCalculator.calculate()`
+- `RiskCalculator.validate_parameters()`
 - `RiskCalculator._calculate_single()`
 - 各路径公式
 - `_build_summaries()`
 - `ResultRepository.update_table()`
+
+参数在“保存参数”和“开始计算”两个入口都会校验。校验内容包括有限数字、正数分母、
+0 到 1 的比例范围、土壤空气孔隙率、毛细管/裂隙总孔隙率，以及建筑物对数公式的定义域。
+因此非法组合会直接显示具体参数和当前值，而不是暴露 `Decimal.InvalidOperation` 这类底层异常。
 
 #### 第 5 步：查看结果
 
@@ -399,6 +427,10 @@ risk_tauri/
 - 贡献率-非致癌
 - 风险控制值
 
+结果标签切换时，`DataTable` 的表头使用“列序号 + 列名”作为 React key。部分结果表存在两个同名的
+“合计”列，如果只用列名作为 key，React 可能把旧表头错误复用到“风险控制值”表中。
+`App.jsx` 还会使用结果表 key 重新建立表格实例，确保不同列结构之间不会互相残留。
+
 #### 第 6 步：导出 Excel
 
 后端链路：
@@ -410,7 +442,15 @@ risk_tauri/
 结果：
 
 - 前端拿到 Blob
-- 浏览器 / WebView 触发下载
+- `saveExcelBlob()` 弹出系统“另存为”窗口
+- 用户自行选择文件名和保存目录
+- 写入成功后才显示绿色成功提示，取消保存不报错
+
+为什么模板下载和结果导出共用同一个保存函数：
+
+- 两者都是“后端生成二进制内容，前端选择位置并写入”
+- 可以统一处理 Tauri、现代浏览器和旧浏览器三种运行环境
+- 可以避免某个按钮弹保存窗口、另一个按钮却静默写入下载目录的不一致体验
 
 ---
 

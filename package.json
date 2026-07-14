@@ -1,7 +1,7 @@
 {
   "name": "risk-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
@@ -16,13 +16,15 @@
     "build:release:windows": "tauri build -b nsis",
     "build:release:windows:msi": "tauri build -b msi",
     "build:release:full": "./build_release.sh",
+    "test:frontend": "node --test src/*.test.js",
     "preview": "vite preview",
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
+    "@tauri-apps/plugin-opener": "2.5.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

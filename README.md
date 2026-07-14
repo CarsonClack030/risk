@@ -45,6 +45,30 @@ npm run dev
 export RISK_PYTHON_BIN=/你的/python
 ```
 
+## 版本与检查更新
+
+界面顶部会显示当前软件版本，并提供“检查更新”按钮。用户主动检查时，软件会读取
+`wangminglei030/risk` 仓库的最新正式 GitHub Release：
+
+- 当前版本已经是最新版本时，只显示状态提示。
+- 发现更高版本时，先弹窗询问用户，不会自动下载或静默安装。
+- 用户确认后，使用系统默认浏览器打开 GitHub Release 页面，自行选择 Windows 或 macOS 安装包。
+
+发布新版本时，要保持下面三个文件中的版本号一致：
+
+```text
+package.json
+src-tauri/Cargo.toml
+src-tauri/tauri.conf.json
+```
+
+推送 `v1.1.0` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
+macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建正式 Release。草稿
+Release 不会被“最新正式版本”接口识别。
+
+注意：GitHub 私有仓库不会向未登录的桌面客户端公开 Release 信息，而且不能把 Personal
+Access Token 写进软件安装包。面向其他用户分发更新前，需要把仓库或专用下载仓库设为公开。
+
 ## 生成 sidecar
 
 后端 sidecar 打包脚本会把 `template.db` 一起打入单文件可执行程序：
@@ -60,6 +84,9 @@ python3 backend/build_sidecar.py
 - `.xls`
 - `.csv`
 - `.txt`
+
+桌面版导入时会打开系统文件选择窗口；保存导入模板和导出计算结果时会打开系统“另存为”窗口，
+文件路径和文件名均由用户自行决定。
 
 生成物默认位于 `backend/bin/`，文件名会自动带上目标三元组，例如：
 

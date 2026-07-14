@@ -8,6 +8,19 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/wangminglei030/risk/releases"
+        },
+        {
+          "url": "https://github.com/wangminglei030/risk/releases/**"
+        }
+      ]
+    }
   ]
 }
