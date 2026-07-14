@@ -77,6 +77,9 @@ jobs:
       - name: Build macOS package
         run: npm run build:release:dmg
 
+      - name: Test packaged macOS backend
+        run: npm run test:macos-bundle
+
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:

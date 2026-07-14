@@ -29,7 +29,8 @@
     "active": true,
     "targets": "all",
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
     },
     "externalBin": [
       "../backend/bin/risk-backend"

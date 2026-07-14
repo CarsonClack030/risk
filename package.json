@@ -17,6 +17,7 @@
     "build:release:windows:msi": "tauri build -b msi",
     "build:release:full": "./build_release.sh",
     "test:frontend": "node --test src/*.test.js",
+    "test:macos-bundle": "bash scripts/smoke_macos_bundle.sh",
     "preview": "vite preview",
     "tauri": "tauri"
   },
