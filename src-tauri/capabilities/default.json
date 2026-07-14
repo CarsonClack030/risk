@@ -15,10 +15,10 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://github.com/wangminglei030/risk/releases"
+          "url": "https://github.com/CarsonClack030/risk/releases"
         },
         {
-          "url": "https://github.com/wangminglei030/risk/releases/**"
+          "url": "https://github.com/CarsonClack030/risk/releases/**"
         }
       ]
     }

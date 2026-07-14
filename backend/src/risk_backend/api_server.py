@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
+import threading
 from decimal import Decimal, InvalidOperation
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -872,6 +875,8 @@ class RequestHandler(BaseHTTPRequestHandler):
     """
 
     backend = RiskBackend()
+    # 桌面壳每次启动都会生成新令牌。只有持有令牌的 Tauri 退出流程可以关闭服务。
+    shutdown_token = ""
 
     def do_OPTIONS(self) -> None:
         # 处理浏览器和 WebView 的预检请求。
@@ -915,6 +920,18 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
+            if parsed.path == "/api/shutdown":
+                supplied_token = self.headers.get("X-Risk-Shutdown-Token", "")
+                if not self.shutdown_token or not hmac.compare_digest(
+                    supplied_token,
+                    self.shutdown_token,
+                ):
+                    self._send_error("无权关闭后端服务", HTTPStatus.FORBIDDEN)
+                    return
+                self._send_json({"status": "stopping"})
+                # shutdown 不能在当前请求线程中同步调用，否则会和 serve_forever 相互等待。
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             if parsed.path == "/api/workspace/import-excel":
                 self._send_json(
                     self.backend.import_workspace_file(
@@ -1066,12 +1083,14 @@ def _first_query(params: dict[str, list[str]], key: str) -> str:
     return values[0] if values else ""
 
 
-def run(host: str = "127.0.0.1", port: int = 38911) -> None:
+def run(host: str = "127.0.0.1", port: int = 38911, shutdown_token: str = "") -> None:
     """启动线程化 HTTP 服务。"""
+    RequestHandler.shutdown_token = shutdown_token
     server = ThreadingHTTPServer((host, port), RequestHandler)
     print(f"risk-backend listening on http://{host}:{port}")
     try:
-        server.serve_forever()
+        # 缩短轮询间隔，让桌面程序退出时能快速响应 shutdown 请求。
+        server.serve_forever(poll_interval=0.05)
     except KeyboardInterrupt:
         pass
     finally:
@@ -1083,8 +1102,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=38911)
+    parser.add_argument("--shutdown-token", default=os.environ.get("RISK_SHUTDOWN_TOKEN", ""))
     args = parser.parse_args()
-    run(args.host, args.port)
+    run(args.host, args.port, args.shutdown_token)
 
 
 if __name__ == "__main__":

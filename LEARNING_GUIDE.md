@@ -98,9 +98,18 @@ risk_tauri/
 - 启动 Python 后端
 - 处理端口冲突
 - 在前端和后端之间传递真实 API 地址
+- 使用本次启动令牌关闭 Python 服务，避免 PyInstaller 子进程残留
 
 桌面壳还通过 `tauri-plugin-opener` 安全地打开 GitHub Release 页面。能力配置只允许
 访问本项目的 Release 地址，不会给前端开放任意外部程序或任意网址。
+
+前端启动后会先通过 Tauri 读取安装包真实版本，再调用 `updateService.js` 查询 GitHub 最新
+正式 Release。发现更高版本时才弹出下载确认；没有更新、断网或接口暂不可用都不会阻塞
+本地后端和主界面。顶部“检查更新”按钮复用同一套逻辑，但手动检查会显示完整状态或错误。
+
+PyInstaller `onefile` 在运行时包含外层引导进程和真正执行 Python 的子进程。直接 kill 外层
+可能让子进程变成孤儿，所以 Tauri 会先向 `/api/shutdown` 发送本次启动生成的令牌。后端
+校验令牌后退出 `serve_forever`，桌面壳最后再清理外层进程，兼顾正常退出和异常兜底。
 
 macOS 发布包还需要代码签名。当前项目在 `tauri.conf.json` 中使用 `signingIdentity: "-"`
 生成完整的 ad-hoc 签名，主要用于避免 Apple Silicon 把 GitHub 下载的应用误判为损坏。
@@ -115,8 +124,9 @@ Team ID，因此 ad-hoc 签名的 sidecar 会拒绝加载 Python 官方签名的
 
 项目把这条经验固化在 `scripts/smoke_macos_bundle.sh` 中。脚本验证 DMG 校验和与应用深度
 签名，检查 sidecar 是否带有所需 entitlement，再启动最终包内的 `risk-backend` 并访问
-`/api/health`。`.github/workflows/release.yml` 会在上传 macOS 构建产物前运行该脚本，因此
-后端启动失败会直接阻止错误安装包进入 Release。
+`/api/health`，最后验证受保护的退出接口能清理进程和监听端口。
+`.github/workflows/release.yml` 会在上传 macOS 构建产物前运行该脚本，因此后端启动或退出
+失败都会直接阻止错误安装包进入 Release。
 
 ### 3.3 接口层：Python HTTP Server
 

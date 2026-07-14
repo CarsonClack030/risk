@@ -39,6 +39,9 @@ npm run dev
 
 桌面壳现在会优先尝试 `127.0.0.1:38911`，如果该端口已被旧实例或其它程序占用，会自动切换到一个空闲本地端口，因此不会再因为端口冲突直接启动失败。
 
+退出软件时，桌面壳会携带本次启动生成的一次性令牌通知后端优雅停止，再清理 PyInstaller
+外层进程。这样 Windows 和 macOS 都不会因为 `onefile` 的父子进程结构遗留后台服务。
+
 如果本机没有把 Python 暴露为 `python3`，可以先设置：
 
 ```bash
@@ -47,12 +50,13 @@ export RISK_PYTHON_BIN=/你的/python
 
 ## 版本与检查更新
 
-界面顶部会显示当前软件版本，并提供“检查更新”按钮。用户主动检查时，软件会读取
-`wangminglei030/risk` 仓库的最新正式 GitHub Release：
+界面顶部会显示当前软件版本，并提供“检查更新”按钮。软件每次启动时都会自动读取
+`CarsonClack030/risk` 仓库的最新正式 GitHub Release，手动按钮也可随时重新检查：
 
 - 当前版本已经是最新版本时，只显示状态提示。
 - 发现更高版本时，先弹窗询问用户，不会自动下载或静默安装。
 - 用户确认后，使用系统默认浏览器打开 GitHub Release 页面，自行选择 Windows 或 macOS 安装包。
+- 自动检查遇到断网或 GitHub 暂不可用时保持静默，不影响软件和本地后端启动。
 
 发布新版本时，要保持下面三个文件中的版本号一致：
 
@@ -62,7 +66,7 @@ src-tauri/Cargo.toml
 src-tauri/tauri.conf.json
 ```
 
-推送 `v1.1.0` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
+推送 `v1.1.1` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
 macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建正式 Release。草稿
 Release 不会被“最新正式版本”接口识别。
 
@@ -133,7 +137,8 @@ Developer ID 公证，首次打开时仍可能需要在“系统设置 -> 隐私
 runtime 会阻止后端加载 Python，从而导致桌面界面提示后端未启动。
 
 构建 DMG 后可执行 `npm run test:macos-bundle`。脚本会验证 DMG、挂载应用、检查签名，
-再实际启动包内后端并请求 `/api/health`；发布工作流也会自动执行同一项检查。
+实际启动包内后端并请求 `/api/health`，最后调用退出接口确认进程和端口都已释放；发布
+工作流也会自动执行同一项检查。
 
 随后再执行 `npm run build`，Tauri 会按 `src-tauri/tauri.conf.json` 里的 `externalBin` 约定把 sidecar 一起打包。
 

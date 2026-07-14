@@ -1,6 +1,6 @@
 [package]
 name = "risk_studio"
-version = "1.1.0"
+version = "1.1.1"
 description = "Modern desktop rewrite for the risk evaluation workflow"
 authors = ["carson"]
 edition = "2021"

@@ -21,7 +21,7 @@ test("更高的 GitHub Release 会触发更新确认", async () => {
       tag_name: "v0.2.0",
       name: "Risk Studio 0.2.0",
       body: "更新说明",
-      html_url: "https://github.com/wangminglei030/risk/releases/tag/v0.2.0",
+      html_url: "https://github.com/CarsonClack030/risk/releases/tag/v0.2.0",
       published_at: "2026-07-14T00:00:00Z",
     }),
   );
@@ -35,7 +35,7 @@ test("相同版本不会重复提示下载", async () => {
   const result = await checkForUpdates("0.1.0", async () =>
     githubResponse(200, {
       tag_name: "v0.1.0",
-      html_url: "https://github.com/wangminglei030/risk/releases/tag/v0.1.0",
+      html_url: "https://github.com/CarsonClack030/risk/releases/tag/v0.1.0",
     }),
   );
   assert.equal(result.status, "current");

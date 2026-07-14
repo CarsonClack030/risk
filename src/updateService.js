@@ -6,8 +6,8 @@ import { compareVersions } from "./versioning.js";
 
 export const PACKAGE_VERSION = packageMetadata.version;
 const GITHUB_LATEST_RELEASE_API =
-  "https://api.github.com/repos/wangminglei030/risk/releases/latest";
-const GITHUB_RELEASES_PATH = "/wangminglei030/risk/releases";
+  "https://api.github.com/repos/CarsonClack030/risk/releases/latest";
+const GITHUB_RELEASES_PATH = "/CarsonClack030/risk/releases";
 
 // 打包后的桌面应用从 Tauri 配置读取真实版本号。
 // 纯浏览器联调没有 Tauri API，因此回退到当前项目版本。

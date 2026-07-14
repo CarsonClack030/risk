@@ -101,7 +101,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState(null);
   const [health, setHealth] = useState(null);
-  // 版本号由 Tauri 打包配置提供；更新信息只在用户主动检查后保存。
+  // 版本号由 Tauri 打包配置提供；启动自动检查和手动检查共用同一份状态。
   const [appVersion, setAppVersion] = useState(PACKAGE_VERSION);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState(null);
@@ -183,6 +183,8 @@ function App() {
   // 这样用户可以连续录入多个污染物。
   const catalogInputRef = useRef(null);
   const workspaceImportInputRef = useRef(null);
+  // 用 ref 标记正在进行的更新请求，避免启动检查和用户点击恰好同时发出两次请求。
+  const updateCheckInFlightRef = useRef(false);
 
   // useDeferredValue 可以把“用户输入”和“真正触发查询”稍微错开。
   // 好处是：用户快速敲字时，界面不会因为每个字符都立即请求后端而发抖。
@@ -197,14 +199,22 @@ function App() {
   const selectedAdminItem = adminItems.find((item) => item.id === selectedAdminId) || null;
   const allPathwaysSelected = PATHWAYS.every((item) => pathways[item.key]);
 
-  // 桌面运行时读取安装包中的真实版本，浏览器调试时使用开发版本回退值。
+  // 桌面运行时读取安装包中的真实版本，随后立即静默检查一次 GitHub Release。
+  // “静默”只表示网络失败或没有更新时不打断启动；发现新版本仍会正常弹窗询问。
   useEffect(() => {
     let cancelled = false;
-    getCurrentAppVersion().then((version) => {
-      if (!cancelled) {
-        setAppVersion(version);
+    async function initializeVersionAndUpdates() {
+      const version = await getCurrentAppVersion();
+      if (cancelled) {
+        return;
       }
-    });
+      setAppVersion(version);
+      await runUpdateCheck(version, {
+        silent: true,
+        isCancelled: () => cancelled,
+      });
+    }
+    initializeVersionAndUpdates();
     return () => {
       cancelled = true;
     };
@@ -355,32 +365,48 @@ function App() {
     setNotice({ kind, text });
   }
 
-  // 用户主动点击后才访问 GitHub，避免软件启动时产生不必要的网络请求。
-  // 只有发现更高的正式版本时才弹出下载确认窗口。
-  async function handleCheckForUpdates() {
-    if (checkingUpdate) {
+  // 启动自动检查与顶部按钮共用这一段逻辑。
+  // silent=true 时，没有更新或网络失败都不打断启动；发现更新始终弹出下载确认窗口。
+  async function runUpdateCheck(
+    currentVersion,
+    { silent = false, isCancelled = () => false } = {},
+  ) {
+    if (updateCheckInFlightRef.current) {
       return;
     }
+    updateCheckInFlightRef.current = true;
     setCheckingUpdate(true);
     try {
-      const update = await checkForUpdates(appVersion);
+      const update = await checkForUpdates(currentVersion);
+      if (isCancelled()) {
+        return;
+      }
       if (update.status === "available") {
         setAvailableUpdate(update);
-      } else if (update.status === "current") {
-        flash("success", `当前已是最新版本 v${appVersion}`);
-      } else if (update.status === "ahead") {
-        flash("success", `当前版本 v${appVersion} 高于 GitHub 已发布版本`);
-      } else {
+      } else if (!silent && update.status === "current") {
+        flash("success", `当前已是最新版本 v${currentVersion}`);
+      } else if (!silent && update.status === "ahead") {
+        flash("success", `当前版本 v${currentVersion} 高于 GitHub 已发布版本`);
+      } else if (!silent) {
         flash(
           "success",
           "GitHub 暂无可读取的正式 Release，请确认仓库已公开并完成版本发布。",
         );
       }
     } catch (loadError) {
-      flash("error", loadError.message);
+      if (!silent && !isCancelled()) {
+        flash("error", loadError.message);
+      }
     } finally {
-      setCheckingUpdate(false);
+      updateCheckInFlightRef.current = false;
+      if (!isCancelled()) {
+        setCheckingUpdate(false);
+      }
     }
+  }
+
+  async function handleCheckForUpdates() {
+    await runUpdateCheck(appVersion);
   }
 
   // 用户在确认弹窗中选择下载后，再把 Release 页面交给系统默认浏览器。
