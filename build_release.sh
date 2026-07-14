@@ -19,7 +19,7 @@ if [[ "$TARGET" != "app" && "$TARGET" != "dmg" ]]; then
   echo "Usage: ./build_release.sh [app|dmg]"
   exit 1
 fi
-npm run tauri -- build -b "$TARGET" --no-sign
+npm run tauri -- build -b "$TARGET"
 
 echo "[4/4] Release build ready"
 if [[ "$TARGET" == "dmg" ]]; then

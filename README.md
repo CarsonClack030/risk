@@ -124,6 +124,10 @@ npm run build:release:app
 npm run build:release:dmg
 ```
 
+macOS 发布构建使用 Tauri 的 ad-hoc 签名（`signingIdentity: "-"`），避免 Apple Silicon
+应用从 GitHub 下载后因为应用包签名不完整而被提示“已损坏”。ad-hoc 签名不等同于 Apple
+Developer ID 公证，首次打开时仍可能需要在“系统设置 -> 隐私与安全性”中允许运行。
+
 随后再执行 `npm run build`，Tauri 会按 `src-tauri/tauri.conf.json` 里的 `externalBin` 约定把 sidecar 一起打包。
 
 ## Windows EXE

@@ -102,6 +102,10 @@ risk_tauri/
 桌面壳还通过 `tauri-plugin-opener` 安全地打开 GitHub Release 页面。能力配置只允许
 访问本项目的 Release 地址，不会给前端开放任意外部程序或任意网址。
 
+macOS 发布包还需要代码签名。当前项目在 `tauri.conf.json` 中使用 `signingIdentity: "-"`
+生成完整的 ad-hoc 签名，主要用于避免 Apple Silicon 把 GitHub 下载的应用误判为损坏。
+正式面向公众分发时，应进一步使用 Apple Developer ID 完成签名和公证。
+
 ### 3.3 接口层：Python HTTP Server
 
 对应文件：`backend/src/risk_backend/api_server.py`
