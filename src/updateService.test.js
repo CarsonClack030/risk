@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkForUpdates } from "./updateService.js";
+import { checkForUpdates, isTrustedReleaseUrl } from "./updateService.js";
 
 function githubResponse(status, body = {}) {
   return {
@@ -39,4 +39,37 @@ test("相同版本不会重复提示下载", async () => {
     }),
   );
   assert.equal(result.status, "current");
+});
+
+test("更新下载地址统一重建为当前仓库的可信地址", async () => {
+  const result = await checkForUpdates("0.1.0", async () =>
+    githubResponse(200, {
+      tag_name: "v0.2.0",
+      html_url: "https://github.com/wangminglei030/risk/releases/tag/v0.2.0",
+    }),
+  );
+
+  assert.equal(
+    result.releaseUrl,
+    "https://github.com/CarsonClack030/risk/releases/tag/v0.2.0",
+  );
+});
+
+test("下载地址校验兼容用户名大小写和旧仓库别名", () => {
+  assert.equal(
+    isTrustedReleaseUrl("https://github.com/carsonclack030/risk/releases/tag/v1.1.1"),
+    true,
+  );
+  assert.equal(
+    isTrustedReleaseUrl("https://github.com/wangminglei030/risk/releases/tag/v1.1.1"),
+    true,
+  );
+  assert.equal(
+    isTrustedReleaseUrl("https://github.com/attacker/risk/releases/tag/v1.1.1"),
+    false,
+  );
+  assert.equal(
+    isTrustedReleaseUrl("https://github.com/CarsonClack030/risk/releases-evil/tag/v1.1.1"),
+    false,
+  );
 });

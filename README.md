@@ -66,7 +66,7 @@ src-tauri/Cargo.toml
 src-tauri/tauri.conf.json
 ```
 
-推送 `v1.1.1` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
+推送 `v1.1.2` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
 macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建正式 Release。草稿
 Release 不会被“最新正式版本”接口识别。
 
