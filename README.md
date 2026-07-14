@@ -66,9 +66,9 @@ src-tauri/Cargo.toml
 src-tauri/tauri.conf.json
 ```
 
-推送 `v1.1.2` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
-macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建正式 Release。草稿
-Release 不会被“最新正式版本”接口识别。
+推送 `v1.1.3` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
+macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建正式 Release。每个版本
+还必须提供 `.github/release-notes/<版本标签>.md` 更新日志；草稿 Release 不会被“最新正式版本”接口识别。
 
 注意：GitHub 私有仓库不会向未登录的桌面客户端公开 Release 信息，而且不能把 Personal
 Access Token 写进软件安装包。面向其他用户分发更新前，需要把仓库或专用下载仓库设为公开。

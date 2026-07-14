@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from typing import Iterable
-
-from risk_backend.models.entities import to_decimal
 from risk_backend.repositories.database import connect
 
 
@@ -38,17 +35,6 @@ class ResultRepository:
         "db_cv": ("RCVS_n", "HCVS_n", "RCVG_n", "HCVG_n", "CVS_pgw"),
     }
 
-    # 不同结果表沿用旧项目里的排序习惯。
-    TABLE_ORDERS = {
-        "db_exposure_ca": "order by ID, number",
-        "db_exposure_nc": "order by ID, number",
-        "db_cr": "order by ID, number",
-        "db_hq": "order by ID, number",
-        "db_pcr": "order by number, ID",
-        "db_phq": "order by ID, number",
-        "db_cv": "order by ID, number",
-    }
-
     def reset(self) -> None:
         """清空所有结果值，但保留工作区占位行。"""
         with connect() as con:
@@ -70,7 +56,14 @@ class ResultRepository:
             )
 
     def fetch_table(self, table: str) -> list[list[object]]:
-        """读取整张结果表，用于前端展示和导出。"""
+        """按工作区序号读取结果表，用于前端展示和导出。
+
+        `ID` 是污染物库编号，同一种污染物重复加入工作区时会拥有相同的 ID；
+        `number` 才是本次工作区中每一条记录的唯一序号。因此所有结果表必须按
+        number 排序，才能与工作区列表和各条浓度记录保持一一对应。
+        """
+        if table not in self.RESET_SQL:
+            raise ValueError(f"不支持的结果表：{table}")
         with connect() as con:
-            rows = con.execute(f"select * from {table} {self.TABLE_ORDERS[table]}").fetchall()
+            rows = con.execute(f"select * from {table} order by number").fetchall()
         return [list(row) for row in rows]

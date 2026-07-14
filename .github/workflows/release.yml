@@ -138,6 +138,9 @@ jobs:
       - build-windows
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
       - name: Download macOS package
         uses: actions/download-artifact@v4
         with:
@@ -158,4 +161,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" release-assets/*
           --verify-tag
           --title "Risk Studio $GITHUB_REF_NAME"
-          --generate-notes
+          --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"

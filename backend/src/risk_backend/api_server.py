@@ -67,6 +67,8 @@ PATHWAY_LABELS = {
 # 之所以集中在这里，而不是散落到多个函数中，
 # 是因为“数据库列结构”和“前端展示结构”天然是一对多关系，
 # 配置化以后，序列化和导出都能直接复用这份定义。
+# 数据库中的 number 通常位于末列，但 displayColumns 会把它调整到首列；
+# 这说明“数据库物理列顺序”和“用户看到的列顺序”可以彼此独立。
 RESULT_CONFIGS = [
     {
         "table": "db_exposure_ca",
@@ -76,13 +78,13 @@ RESULT_CONFIGS = [
             "IIVER_ca1", "IOVER_ca3", "IIVER_ca2", "DGWER_ca", "CGWER_ca", "e_name", "number",
         ],
         "headers": [
-            "编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
+            "序号", "污染物编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
             "吸入室外空气中来自表层土壤的气态污染物", "吸入室外空气中来自下层土壤的气态污染物",
             "吸入室内空气中来自下层土壤的气态污染物", "吸入室外空气中来自地下水的气态污染物",
             "吸入室内空气中来自地下水的气态污染物", "皮肤接触地下水", "饮用地下水",
         ],
         "displayColumns": [
-            "ID", "p_name", "OISER_ca", "DCSER_ca", "PISER_ca", "IOVER_ca1", "IOVER_ca2",
+            "number", "ID", "p_name", "OISER_ca", "DCSER_ca", "PISER_ca", "IOVER_ca1", "IOVER_ca2",
             "IIVER_ca1", "IOVER_ca3", "IIVER_ca2", "DGWER_ca", "CGWER_ca",
         ],
     },
@@ -94,13 +96,13 @@ RESULT_CONFIGS = [
             "IIVER_nc1", "IOVER_nc3", "IIVER_nc2", "DGWER_nc", "CGWER_nc", "e_name", "number",
         ],
         "headers": [
-            "编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
+            "序号", "污染物编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
             "吸入室外空气中来自表层土壤的气态污染物", "吸入室外空气中来自下层土壤的气态污染物",
             "吸入室内空气中来自下层土壤的气态污染物", "吸入室外空气中来自地下水的气态污染物",
             "吸入室内空气中来自地下水的气态污染物", "皮肤接触地下水", "饮用地下水",
         ],
         "displayColumns": [
-            "ID", "p_name", "OISER_nc", "DCSER_nc", "PISER_nc", "IOVER_nc1", "IOVER_nc2",
+            "number", "ID", "p_name", "OISER_nc", "DCSER_nc", "PISER_nc", "IOVER_nc1", "IOVER_nc2",
             "IIVER_nc1", "IOVER_nc3", "IIVER_nc2", "DGWER_nc", "CGWER_nc",
         ],
     },
@@ -112,13 +114,13 @@ RESULT_CONFIGS = [
             "CR_sn", "CR_iov3", "CR_iiv2", "CR_dgw", "CR_cgw", "CR_wn", "e_name", "number",
         ],
         "headers": [
-            "编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
+            "序号", "污染物编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
             "吸入室外空气中来自表层土壤的气态污染物", "吸入室外空气中来自下层土壤的气态污染物",
             "吸入室内空气中来自下层土壤的气态污染物", "合计", "吸入室外空气中来自地下水的气态污染物",
             "吸入室内空气中来自地下水的气态污染物", "皮肤接触地下水", "饮用地下水", "合计",
         ],
         "displayColumns": [
-            "ID", "p_name", "CR_ois", "CR_dcs", "CR_pis", "CR_iov1", "CR_iov2", "CR_iiv1",
+            "number", "ID", "p_name", "CR_ois", "CR_dcs", "CR_pis", "CR_iov1", "CR_iov2", "CR_iiv1",
             "CR_sn", "CR_iov3", "CR_iiv2", "CR_dgw", "CR_cgw", "CR_wn",
         ],
     },
@@ -130,13 +132,13 @@ RESULT_CONFIGS = [
             "HI_sn", "HQ_iov3", "HQ_iiv2", "HQ_dgw", "HQ_cgw", "HI_wn", "e_name", "number",
         ],
         "headers": [
-            "编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
+            "序号", "污染物编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
             "吸入室外空气中来自表层土壤的气态污染物", "吸入室外空气中来自下层土壤的气态污染物",
             "吸入室内空气中来自下层土壤的气态污染物", "合计", "吸入室外空气中来自地下水的气态污染物",
             "吸入室内空气中来自地下水的气态污染物", "皮肤接触地下水", "饮用地下水", "合计",
         ],
         "displayColumns": [
-            "ID", "p_name", "HQ_ois", "HQ_dcs", "HQ_pis", "HQ_iov1", "HQ_iov2", "HQ_iiv1",
+            "number", "ID", "p_name", "HQ_ois", "HQ_dcs", "HQ_pis", "HQ_iov1", "HQ_iov2", "HQ_iiv1",
             "HI_sn", "HQ_iov3", "HQ_iiv2", "HQ_dgw", "HQ_cgw", "HI_wn",
         ],
     },
@@ -148,13 +150,13 @@ RESULT_CONFIGS = [
             "PCR_sn", "PCR_iov3", "PCR_iiv2", "PCR_dgw", "PCR_cgw", "PCR_wn", "e_name", "number",
         ],
         "headers": [
-            "编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
+            "序号", "污染物编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
             "吸入室外空气中来自表层土壤的气态污染物", "吸入室外空气中来自下层土壤的气态污染物",
             "吸入室内空气中来自下层土壤的气态污染物", "合计", "吸入室外空气中来自地下水的气态污染物",
             "吸入室内空气中来自地下水的气态污染物", "皮肤接触地下水", "饮用地下水", "合计",
         ],
         "displayColumns": [
-            "ID", "p_name", "PCR_ois", "PCR_dcs", "PCR_pis", "PCR_iov1", "PCR_iov2", "PCR_iiv1",
+            "number", "ID", "p_name", "PCR_ois", "PCR_dcs", "PCR_pis", "PCR_iov1", "PCR_iov2", "PCR_iiv1",
             "PCR_sn", "PCR_iov3", "PCR_iiv2", "PCR_dgw", "PCR_cgw", "PCR_wn",
         ],
     },
@@ -166,13 +168,13 @@ RESULT_CONFIGS = [
             "PHI_sn", "PHQ_iov3", "PHQ_iiv2", "PHQ_dgw", "PHQ_cgw", "PHI_wn", "e_name", "number",
         ],
         "headers": [
-            "编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
+            "序号", "污染物编号", "污染物名称", "口摄入土壤颗粒物", "皮肤接触土壤颗粒物", "吸入土壤颗粒物",
             "吸入室外空气中来自表层土壤的气态污染物", "吸入室外空气中来自下层土壤的气态污染物",
             "吸入室内空气中来自下层土壤的气态污染物", "合计", "吸入室外空气中来自地下水的气态污染物",
             "吸入室内空气中来自地下水的气态污染物", "皮肤接触地下水", "饮用地下水", "合计",
         ],
         "displayColumns": [
-            "ID", "p_name", "PHQ_ois", "PHQ_dcs", "PHQ_pis", "PHQ_iov1", "PHQ_iov2", "PHQ_iiv1",
+            "number", "ID", "p_name", "PHQ_ois", "PHQ_dcs", "PHQ_pis", "PHQ_iov1", "PHQ_iov2", "PHQ_iiv1",
             "PHI_sn", "PHQ_iov3", "PHQ_iiv2", "PHQ_dgw", "PHQ_cgw", "PHI_wn",
         ],
     },
@@ -181,10 +183,10 @@ RESULT_CONFIGS = [
         "title": "风险控制值",
         "columns": ["ID", "p_name", "RCVS_n", "HCVS_n", "RCVG_n", "HCVG_n", "CVS_pgw", "e_name", "number"],
         "headers": [
-            "编号", "污染物名称", "土壤致癌风险控制值", "土壤非致癌风险控制值",
+            "序号", "污染物编号", "污染物名称", "土壤致癌风险控制值", "土壤非致癌风险控制值",
             "地下水致癌风险控制值", "地下水非致癌风险控制值", "保护地下水的土壤风险控制值",
         ],
-        "displayColumns": ["ID", "p_name", "RCVS_n", "HCVS_n", "RCVG_n", "HCVG_n", "CVS_pgw"],
+        "displayColumns": ["number", "ID", "p_name", "RCVS_n", "HCVS_n", "RCVG_n", "HCVG_n", "CVS_pgw"],
     },
 ]
 

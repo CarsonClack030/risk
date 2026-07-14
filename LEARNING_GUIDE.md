@@ -459,6 +459,14 @@ Team ID，因此 ad-hoc 签名的 sidecar 会拒绝加载 Python 官方签名的
 “合计”列，如果只用列名作为 key，React 可能把旧表头错误复用到“风险控制值”表中。
 `App.jsx` 还会使用结果表 key 重新建立表格实例，确保不同列结构之间不会互相残留。
 
+结果行的身份和排序必须使用工作区序号 `number`，不能使用污染物库编号 `ID`：
+
+- `ID` 只表示污染物在基础数据库中的编号，同一种污染物重复加入时会重复
+- `number` 表示本次工作区中的具体条目，每次加入都会获得不同序号
+- `ResultRepository.fetch_table()` 对所有结果表统一执行 `order by number`
+- `serialize_results()` 把“序号、污染物编号、污染物名称”作为前三列，方便和工作区逐行核对
+- 结果弹窗与 Excel 导出共用 `serialize_results()`，因此两处顺序始终一致
+
 #### 第 6 步：导出 Excel
 
 后端链路：
