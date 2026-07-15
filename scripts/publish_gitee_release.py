@@ -78,6 +78,33 @@ class GiteeClient:
             return None
         return json.loads(raw.decode("utf-8"))
 
+    def trigger_pull_mirror(self) -> None:
+        """Ask Gitee to pull GitHub before waiting for the new release tag."""
+        token = quote(self.token, safe="")
+        request = Request(
+            f"{API_BASE_URL}{self.repo_path}/remote_mirror/pull?access_token={token}",
+            data=b"",
+            method="POST",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "Risk-Studio-Gitee-Publisher/1.0",
+            },
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                response.read()
+        except HTTPError as exc:
+            details = exc.read().decode("utf-8", "replace").strip()
+            # Never include the request URL here because it contains the secret token.
+            raise GiteeApiError(
+                exc.code,
+                f"Gitee Pull mirror trigger failed ({exc.code}): {details}",
+            ) from exc
+        except URLError as exc:
+            raise RuntimeError(f"Unable to trigger Gitee Pull mirror: {exc.reason}") from exc
+
+        print("Gitee Pull mirror sync requested")
+
     def tag_exists(self, tag: str) -> bool:
         tags = self._request_json(
             "GET", f"{self.repo_path}/tags?page=1&per_page=100&direction=desc"
@@ -210,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     assets = release_assets(args.assets_dir)
 
     client = GiteeClient(token, args.owner, args.repo)
+    client.trigger_pull_mirror()
     wait_for_tag(client, args.tag, args.tag_timeout, args.tag_poll_interval)
     release = client.upsert_release(args.tag, f"Risk Studio {args.tag}", notes)
     release_id = int(release["id"])
