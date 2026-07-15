@@ -134,6 +134,8 @@ Team ID，因此 ad-hoc 签名的 sidecar 会拒绝加载 Python 官方签名的
 同一个发布流程还会调用 `scripts/publish_gitee_release.py`，把 GitHub 构建出的 `.dmg`
 与 `.exe` 同步到 Gitee Release。脚本先主动请求 Pull 镜像同步，再等待版本标签出现，然后
 按标签创建或更新发行版；重复执行时会删除同名旧附件后重新上传，因此可以安全地修复一次失败的发布。
+macOS 与 Windows 附件会并行上传，并为跨境慢速连接保留更长超时时间，避免其中一个平台
+长时间占用上传通道后另一个平台才开始传输。
 Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本不会把令牌写入
 下载地址或控制台。历史版本可以通过 `.github/workflows/sync-gitee-release.yml` 手动补发。
 

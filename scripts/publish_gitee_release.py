@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import mimetypes
 import os
@@ -171,8 +172,8 @@ class GiteeClient:
             f"{self.repo_path}/releases/{release_id}/attach_files",
             body=body,
             content_type=f"multipart/form-data; boundary={boundary}",
-            # Gitee may need several minutes to receive and process installer files.
-            timeout_seconds=600,
+            # GitHub-hosted runners can be very slow when uploading into mainland China.
+            timeout_seconds=1800,
         )
 
 
@@ -248,10 +249,19 @@ def main(argv: list[str] | None = None) -> int:
         if old_attachment is not None:
             print(f"Replacing existing Gitee asset: {asset.name}")
             client.delete_attachment(release_id, int(old_attachment["id"]))
-        else:
+
+    # The two cross-border uploads are independent. Running them together avoids making
+    # Windows wait for the macOS upload (or vice versa) on a slow GitHub-hosted runner.
+    with ThreadPoolExecutor(max_workers=len(assets)) as executor:
+        pending = {}
+        for asset in assets:
             print(f"Uploading Gitee asset: {asset.name} ({asset.stat().st_size} bytes)")
-        uploaded = client.upload_attachment(release_id, asset)
-        print(f"Uploaded: {uploaded.get('browser_download_url', asset.name)}")
+            pending[executor.submit(client.upload_attachment, release_id, asset)] = asset
+
+        for future in as_completed(pending):
+            asset = pending[future]
+            uploaded = future.result()
+            print(f"Uploaded: {uploaded.get('browser_download_url', asset.name)}")
 
     print(f"Gitee Release published: https://gitee.com/{args.owner}/{args.repo}/releases/tag/{args.tag}")
     return 0
