@@ -6,7 +6,7 @@ on:
       tag:
         description: GitHub Release tag to publish on Gitee
         required: true
-        default: v1.1.6
+        default: v1.1.7
         type: string
   push:
     branches:

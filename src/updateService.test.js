@@ -27,6 +27,42 @@ test("Gitee 404 会被识别为暂无可读取的正式版本", async () => {
   assert.equal(requestedOptions.headers.Accept, "application/json");
 });
 
+test("Gitee 403 时自动改用 GitHub 查询正式版本", async () => {
+  const requestedUrls = [];
+  const result = await checkForUpdates("1.1.6", async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("gitee.com/api/")) {
+      return giteeResponse(403);
+    }
+    return giteeResponse(200, {
+      tag_name: "v1.1.7",
+      name: "Risk Studio v1.1.7",
+      body: "修复更新查询",
+      published_at: "2026-07-15T06:00:00Z",
+      draft: false,
+      prerelease: false,
+    });
+  });
+
+  assert.equal(result.status, "available");
+  assert.equal(result.latestVersion, "1.1.7");
+  assert.equal(result.releaseUrl, "https://gitee.com/CarsonClack030/risk/releases/tag/v1.1.7");
+  assert.equal(requestedUrls.length, 2);
+  assert.match(requestedUrls[1], /^https:\/\/api\.github\.com\/repos\//);
+});
+
+test("Gitee 与 GitHub 都不可用时返回统一的友好提示", async () => {
+  await assert.rejects(
+    checkForUpdates("1.1.6", async (url) => {
+      if (url.includes("gitee.com/api/")) {
+        return giteeResponse(403);
+      }
+      throw new TypeError("network failed");
+    }),
+    /暂时无法连接更新服务/,
+  );
+});
+
 test("更高的 Gitee Release 会触发更新确认", async () => {
   const result = await checkForUpdates("0.1.0", async () =>
     giteeResponse(200, [

@@ -63,13 +63,14 @@ export RISK_PYTHON_BIN=/你的/python
 
 ## 版本与检查更新
 
-界面顶部会显示当前软件版本，并提供“检查更新”按钮。软件每次启动时都会自动读取
-`CarsonClack030/risk` 仓库的最新正式 Gitee Release，手动按钮也可随时重新检查：
+界面顶部会显示当前软件版本，并提供“检查更新”按钮。软件每次启动时都会优先读取
+`CarsonClack030/risk` 仓库的最新正式 Gitee Release；如果 Gitee 匿名接口临时限流，
+会自动改用 GitHub 查询版本元数据。手动按钮也可随时重新检查：
 
 - 当前版本已经是最新版本时，只显示状态提示。
 - 发现更高版本时，先弹窗询问用户，不会自动下载或静默安装。
 - 用户确认后，使用系统默认浏览器打开 Gitee Release 页面，自行选择 Windows 或 macOS 安装包。
-- 自动检查遇到断网或 Gitee 暂不可用时保持静默，不影响软件和本地后端启动。
+- 自动检查遇到断网或两个更新源都暂不可用时保持静默，不影响软件和本地后端启动。
 
 发布新版本时，要保持下面三个文件中的版本号一致：
 
@@ -79,7 +80,7 @@ src-tauri/Cargo.toml
 src-tauri/tauri.conf.json
 ```
 
-推送 `v1.1.6` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
+推送 `v1.1.7` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
 macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建 GitHub 和 Gitee 正式
 Release。每个版本还必须提供 `.github/release-notes/<版本标签>.md` 更新日志；草稿
 Release 不会被“最新正式版本”接口识别。

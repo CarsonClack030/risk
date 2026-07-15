@@ -7,6 +7,8 @@ import { compareVersions } from "./versioning.js";
 export const PACKAGE_VERSION = packageMetadata.version;
 const GITEE_REPOSITORY = "CarsonClack030/risk";
 const GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases?page=1&per_page=20&direction=desc`;
+const GITHUB_LATEST_RELEASE_API =
+  "https://api.github.com/repos/CarsonClack030/risk/releases/latest";
 
 function canonicalReleaseUrl(tagName) {
   const encodedTag = encodeURIComponent(String(tagName || "").trim());
@@ -46,9 +48,7 @@ export async function getCurrentAppVersion() {
   }
 }
 
-// Gitee 的 Release 列表可能同时包含正式版和预发布版，因此客户端主动选择
-// 第一条正式版本，避免测试版本被普通用户误装。
-export async function checkForUpdates(currentVersion, request = fetch) {
+async function fetchGiteeRelease(request) {
   let response;
   try {
     response = await request(GITEE_RELEASES_API, {
@@ -56,27 +56,58 @@ export async function checkForUpdates(currentVersion, request = fetch) {
         Accept: "application/json",
       },
     });
-  } catch {
-    throw new Error("无法连接 Gitee，请检查网络后重试。");
+  } catch (error) {
+    throw new Error("无法连接 Gitee 更新服务。", { cause: error });
   }
 
   if (response.status === 404) {
-    return {
-      status: "unavailable",
-      currentVersion,
-    };
-  }
-  if (response.status === 403) {
-    throw new Error("Gitee 暂时拒绝了更新查询，请稍后再试。");
+    return null;
   }
   if (!response.ok) {
-    throw new Error(`检查更新失败，Gitee 返回状态码 ${response.status}。`);
+    throw new Error(`Gitee 更新服务返回状态码 ${response.status}。`);
   }
 
   const releases = await response.json();
-  const release = Array.isArray(releases)
-    ? releases.find((item) => item && item.prerelease !== true)
-    : null;
+  return Array.isArray(releases) ? releases.find((item) => item && item.prerelease !== true) : null;
+}
+
+async function fetchGitHubRelease(request) {
+  let response;
+  try {
+    response = await request(GITHUB_LATEST_RELEASE_API, {
+      headers: {
+        Accept: "application/vnd.github+json",
+      },
+    });
+  } catch (error) {
+    throw new Error("无法连接 GitHub 备用更新服务。", { cause: error });
+  }
+
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`GitHub 备用更新服务返回状态码 ${response.status}。`);
+  }
+
+  const release = await response.json();
+  return release && release.draft !== true && release.prerelease !== true ? release : null;
+}
+
+// Gitee 是国内用户的首选更新源。它的匿名 API 偶尔会因访问频率返回 403，
+// 此时仅改用 GitHub 获取版本元数据；安装包下载页仍固定为可信的 Gitee Release。
+export async function checkForUpdates(currentVersion, request = fetch) {
+  let release;
+  try {
+    release = await fetchGiteeRelease(request);
+  } catch (_giteeError) {
+    try {
+      release = await fetchGitHubRelease(request);
+    } catch (_githubError) {
+      throw new Error("暂时无法连接更新服务，请检查网络后稍后重试。");
+    }
+  }
+
   if (!release) {
     return {
       status: "unavailable",
@@ -90,7 +121,7 @@ export async function checkForUpdates(currentVersion, request = fetch) {
     latestVersion,
     releaseName: release.name || `v${latestVersion}`,
     releaseNotes: String(release.body || "").trim(),
-    // 下载页只由固定 Gitee 仓库和 API 返回的 tag 组成，不信任响应中的任意外链。
+    // 下载页只由固定 Gitee 仓库和版本 tag 组成，不信任响应中的任意外链。
     releaseUrl: canonicalReleaseUrl(release.tag_name),
     publishedAt: release.created_at || release.published_at || "",
   };
