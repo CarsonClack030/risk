@@ -46,6 +46,7 @@ class GiteeClient:
         *,
         body: bytes | None = None,
         content_type: str = "application/json",
+        timeout_seconds: int = 120,
     ) -> Any:
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -62,7 +63,7 @@ class GiteeClient:
             },
         )
         try:
-            with urlopen(request, timeout=120) as response:
+            with urlopen(request, timeout=timeout_seconds) as response:
                 raw = response.read()
         except HTTPError as exc:
             details = exc.read().decode("utf-8", "replace").strip()
@@ -143,6 +144,8 @@ class GiteeClient:
             f"{self.repo_path}/releases/{release_id}/attach_files",
             body=body,
             content_type=f"multipart/form-data; boundary={boundary}",
+            # Gitee may need several minutes to receive and process installer files.
+            timeout_seconds=600,
         )
 
 
@@ -218,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Replacing existing Gitee asset: {asset.name}")
             client.delete_attachment(release_id, int(old_attachment["id"]))
         else:
-            print(f"Uploading Gitee asset: {asset.name}")
+            print(f"Uploading Gitee asset: {asset.name} ({asset.stat().st_size} bytes)")
         uploaded = client.upload_attachment(release_id, asset)
         print(f"Uploaded: {uploaded.get('browser_download_url', asset.name)}")
 
