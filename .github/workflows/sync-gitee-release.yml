@@ -1,0 +1,44 @@
+name: Sync Gitee Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub Release tag to publish on Gitee
+        required: true
+        default: v1.1.4
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitee-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-gitee:
+    name: Publish installers to Gitee
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tooling and notes
+        uses: actions/checkout@v4
+
+      - name: Download GitHub Release installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          gh release download "${{ inputs.tag }}"
+          --dir release-assets
+          --pattern "*.dmg"
+          --pattern "*.exe"
+
+      - name: Publish Gitee Release
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+        run: >-
+          python scripts/publish_gitee_release.py
+          --tag "${{ inputs.tag }}"
+          --notes-file ".github/release-notes/${{ inputs.tag }}.md"
+          --assets-dir release-assets

@@ -67,8 +67,14 @@ src-tauri/tauri.conf.json
 ```
 
 推送 `v1.1.4` 这类版本 tag 后，`.github/workflows/release.yml` 会自动验证源码、构建
-macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建正式 Release。每个版本
-还必须提供 `.github/release-notes/<版本标签>.md` 更新日志；草稿 Release 不会被“最新正式版本”接口识别。
+macOS DMG 与 Windows NSIS 安装包，并在两个平台都成功后创建 GitHub 和 Gitee 正式
+Release。每个版本还必须提供 `.github/release-notes/<版本标签>.md` 更新日志；草稿
+Release 不会被“最新正式版本”接口识别。
+
+Gitee 发布使用仓库 Actions Secret `GITEE_ACCESS_TOKEN`，令牌需要具备项目读写权限。
+已经存在于 GitHub 的版本可从 Actions 页面手动运行 `Sync Gitee Release`，输入版本标签后
+补发相同的更新日志和 `.dmg/.exe` 安装包。令牌只能保存在 GitHub Secrets 中，不能写入
+工作流、源代码、日志或软件安装包。
 
 注意：GitHub 私有仓库不会向未登录的桌面客户端公开 Release 信息，而且不能把 Personal
 Access Token 写进软件安装包。面向其他用户分发更新前，需要把仓库或专用下载仓库设为公开。

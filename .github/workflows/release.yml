@@ -162,3 +162,35 @@ jobs:
           --verify-tag
           --title "Risk Studio $GITHUB_REF_NAME"
           --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"
+
+  publish-gitee:
+    name: Create Gitee Release
+    needs:
+      - build-macos
+      - build-windows
+      - publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tooling and notes
+        uses: actions/checkout@v4
+
+      - name: Download macOS package
+        uses: actions/download-artifact@v4
+        with:
+          name: risk-studio-macos-${{ github.ref_name }}
+          path: release-assets
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: risk-studio-windows-${{ github.ref_name }}
+          path: release-assets
+
+      - name: Publish Gitee Release
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+        run: >-
+          python scripts/publish_gitee_release.py
+          --tag "$GITHUB_REF_NAME"
+          --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"
+          --assets-dir release-assets
