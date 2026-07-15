@@ -6,7 +6,6 @@ import unicodedata
 from risk_backend.models.entities import Pollutant, to_decimal
 from risk_backend.repositories.database import connect
 
-
 # db_pol 表的列顺序定义。
 # 这里集中管理后，查询目录和读取单个污染物都可以复用同一份字段列表。
 POLLUTANT_COLUMNS = (
@@ -116,7 +115,9 @@ def _choose_single_match(matches: list[Pollutant], query: str) -> Pollutant | No
         return matches[0]
     names = "、".join(item.name for item in matches[:3])
     more = " 等" if len(matches) > 3 else ""
-    raise ValueError(f"污染物名称“{query}”匹配到多条记录：{names}{more}，请补全名称或直接填写编号")
+    raise ValueError(
+        f"污染物名称“{query}”匹配到多条记录：{names}{more}，请补全名称或直接填写编号"
+    )
 
 
 class CatalogRepository:
@@ -179,7 +180,9 @@ class CatalogRepository:
                 (query,),
             ).fetchall()
             if exact_rows:
-                return _choose_single_match([_row_to_pollutant(row) for row in exact_rows], query)
+                return _choose_single_match(
+                    [_row_to_pollutant(row) for row in exact_rows], query
+                )
 
             # 原始名称可能因为标点或“顺式”位置不同而无法直接 LIKE 命中。
             # 同时加入稳定主体词，例如用“二氯乙烯”找出所有相关异构体，
@@ -191,7 +194,7 @@ class CatalogRepository:
             where_clause = " or ".join("p_name like ?" for _term in search_terms)
             candidate_rows = con.execute(
                 f"""
-                select {', '.join(POLLUTANT_COLUMNS)}
+                select {", ".join(POLLUTANT_COLUMNS)}
                 from db_pol
                 where {where_clause}
                 order by number
@@ -216,11 +219,16 @@ class CatalogRepository:
                 score = 100
             elif pollutant.name.startswith(query) or query.startswith(pollutant.name):
                 score = 90
-            elif normalized_name.startswith(normalized_query) or normalized_query.startswith(normalized_name):
+            elif normalized_name.startswith(
+                normalized_query
+            ) or normalized_query.startswith(normalized_name):
                 score = 80
             elif query in pollutant.name or pollutant.name in query:
                 score = 70
-            elif normalized_query in normalized_name or normalized_name in normalized_query:
+            elif (
+                normalized_query in normalized_name
+                or normalized_name in normalized_query
+            ):
                 score = 60
             if score > 0:
                 scored.append((score, pollutant))

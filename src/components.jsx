@@ -1,18 +1,32 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 
 // 这个文件收口可复用的“基础展示组件”。
 // App.jsx 会非常大，如果连弹窗、卡片、表格这些基础结构也全写在里面，
 // 学习时会很难分清“页面业务逻辑”和“可复用 UI 组件”的边界。
 
 export function Modal({ title, subtitle, size = "lg", onClose, children, actions }) {
-  // Modal 组件只负责弹窗骨架，不负责具体业务内容。
-  // children 由调用者自由传入，这样同一套弹窗结构可以被登录、参数设置、结果查看等多处复用。
+  const titleId = useId();
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className={`modal-shell modal-${size}`} onClick={(event) => event.stopPropagation()}>
+      <div
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className={`modal-shell modal-${size}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
         <div className="modal-header">
           <div>
-            <h2>{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
           <button className="ghost-icon" onClick={onClose} type="button">
@@ -104,9 +118,19 @@ export function DataTable({
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                // onSelect 是可选的：
-                // 有些表格只是展示结果，有些表格则需要点击选中某一行。
+                aria-selected={onSelect ? selectedKey === row.key : undefined}
                 onClick={onSelect ? () => onSelect(row.key) : undefined}
+                onKeyDown={
+                  onSelect
+                    ? (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onSelect(row.key);
+                        }
+                      }
+                    : undefined
+                }
+                tabIndex={onSelect ? 0 : undefined}
               >
                 {row.cells.map((cell, index) => (
                   <td key={`${row.key}-${index}`}>{cell === "" ? "—" : cell}</td>

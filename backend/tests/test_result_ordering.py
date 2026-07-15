@@ -7,8 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from risk_backend.api_server import RESULT_CONFIGS, serialize_results
 from risk_backend.repositories.results import ResultRepository
+from risk_backend.serialization import RESULT_CONFIGS, serialize_results
 
 
 class FakeResultRepository:
@@ -65,7 +65,9 @@ class ResultOrderingTests(unittest.TestCase):
 
     def test_fetch_table_orders_by_workspace_number(self) -> None:
         repository = ResultRepository()
-        with patch("risk_backend.repositories.results.connect", self.connect_to_test_database):
+        with patch(
+            "risk_backend.repositories.results.connect", self.connect_to_test_database
+        ):
             rows = repository.fetch_table("db_cv")
 
         self.assertEqual([row[-1] for row in rows], [1, 2, 3])

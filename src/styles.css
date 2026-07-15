@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
-  font-family: "Avenir Next", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-    sans-serif;
+  font-family:
+    "Avenir Next", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: #13232f;
@@ -114,14 +114,6 @@ table {
   margin-bottom: 18px;
 }
 
-.eyebrow {
-  margin: 0 0 10px;
-  font-size: 0.78rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  opacity: 0.72;
-}
-
 .hero-panel h1 {
   margin: 0;
   font-size: clamp(1.72rem, 2vw + 0.9rem, 2.3rem);
@@ -146,12 +138,6 @@ table {
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-}
-
-.hero-copy {
-  margin: 14px 0 0;
-  max-width: 48ch;
-  color: rgba(248, 255, 253, 0.82);
 }
 
 .hero-actions {
@@ -508,7 +494,10 @@ table {
   border: 0;
   border-radius: 14px;
   padding: 11px 16px;
-  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease;
 }
 
 .ghost-button,
@@ -660,12 +649,6 @@ button:disabled {
   padding: 14px 18px;
   border-radius: 16px;
   border: 1px solid transparent;
-}
-
-.error-banner {
-  background: rgba(253, 228, 220, 0.92);
-  border-color: rgba(180, 74, 42, 0.16);
-  color: #813118;
 }
 
 .success-banner {

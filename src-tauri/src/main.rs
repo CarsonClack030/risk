@@ -1,10 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// 这是 Tauri 桌面壳的入口。
-// 它主要做三件事：
-// 1. 启动时挑一个可用的本地端口。
-// 2. 拉起 Python 后端（开发时直接跑脚本，发布时跑 sidecar）。
-// 3. 把真实的后端地址告诉前端，并在应用退出时清理子进程。
+// 桌面壳负责启动 Python 后端、向前端提供动态端口并在退出时清理进程。
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -16,19 +12,12 @@ use tauri::{Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-// BackendState 用来保存当前已经启动的后端进程句柄，
-// 这样应用退出时可以把它干净地 kill 掉。
 struct BackendState(Mutex<Option<ManagedBackend>>);
 
-// BackendConfig 用来保存前端真正应该访问的 API 地址。
-// 由于端口现在支持自动回退，因此这个地址不能在前端写死。
 struct BackendConfig {
     api_base: String,
 }
 
-// 开发态和发布态的后端进程类型不同：
-// - 开发态：直接用 std::process::Child 启动 Python 脚本
-// - 发布态：通过 Tauri sidecar 启动打包后的后端二进制
 enum BackendProcess {
     Dev(Child),
     Sidecar(CommandChild),
@@ -48,12 +37,8 @@ struct ManagedBackend {
 fn resolve_backend_port() -> Result<u16, String> {
     const DEFAULT_PORT: u16 = 38911;
     if let Ok(listener) = TcpListener::bind(("127.0.0.1", DEFAULT_PORT)) {
-        let port = listener
-            .local_addr()
-            .map_err(|error| error.to_string())?
-            .port();
         drop(listener);
-        return Ok(port);
+        return Ok(DEFAULT_PORT);
     }
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
@@ -122,11 +107,8 @@ fn spawn_backend(
     // 把 sidecar 的 stdout/stderr 转发到桌面壳日志，方便排错。
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
-                    eprintln!("risk-backend: {}", String::from_utf8_lossy(&line));
-                }
-                _ => {}
+            if let CommandEvent::Stdout(line) | CommandEvent::Stderr(line) = event {
+                eprintln!("risk-backend: {}", String::from_utf8_lossy(&line));
             }
         }
     });
@@ -174,7 +156,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        // opener 只负责把确认后的 GitHub Release 页面交给系统浏览器打开。
+        // opener 只负责把确认后的 Gitee Release 页面交给系统浏览器打开。
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(BackendState(Mutex::new(None)))
@@ -185,7 +167,7 @@ fn main() {
         .setup(move |app| {
             // 应用启动阶段就拉起后端，确保前端打开后很快能完成健康检查。
             let child = spawn_backend(app.handle(), backend_port, &shutdown_token)
-                .map_err(|message| io::Error::new(io::ErrorKind::Other, message))?;
+                .map_err(io::Error::other)?;
             let state = app.state::<BackendState>();
             *state.0.lock().expect("failed to lock backend state") = Some(ManagedBackend {
                 process: child,

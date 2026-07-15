@@ -1,0 +1,19 @@
+target-version = "py39"
+line-length = 88
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "PERF"]
+ignore = [
+  "B905",   # Python 3.9 development environments do not support zip(strict=...).
+  "E501",   # Ruff formatter cannot wrap long XML and user-facing strings.
+  "PERF203", # Small fallback loops intentionally catch per-candidate errors.
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[lint.per-file-ignores]
+# 计算公式保持经过业务验证的原始表达式，不做等价语法现代化。
+"backend/src/risk_backend/services/calculator.py" = ["UP032"]

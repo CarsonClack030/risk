@@ -8,7 +8,6 @@ import xlrd
 
 from risk_backend.xlsx import load_xlsx_rows
 
-
 OLE2_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 ZIP_SIGNATURE = b"PK\x03\x04"
 
@@ -36,10 +35,13 @@ def load_xls_rows(content: bytes) -> list[list[str]]:
     if workbook.nsheets == 0:
         raise ValueError("Excel 文件中没有可读取的工作表")
     sheet = workbook.sheet_by_index(0)
-    rows: list[list[str]] = []
-    for row_index in range(sheet.nrows):
-        rows.append([_normalize_text_cell(sheet.cell_value(row_index, column)) for column in range(sheet.ncols)])
-    return rows
+    return [
+        [
+            _normalize_text_cell(sheet.cell_value(row_index, column))
+            for column in range(sheet.ncols)
+        ]
+        for row_index in range(sheet.nrows)
+    ]
 
 
 def _decode_text_content(content: bytes) -> str:
@@ -56,7 +58,9 @@ def _decode_text_content(content: bytes) -> str:
         except UnicodeDecodeError as error:
             last_error = error
     if last_error is not None:
-        raise ValueError("文件编码无法识别，请尝试另存为 UTF-8、CSV 或 XLSX") from last_error
+        raise ValueError(
+            "文件编码无法识别，请尝试另存为 UTF-8、CSV 或 XLSX"
+        ) from last_error
     raise ValueError("文件内容为空")
 
 
@@ -96,7 +100,9 @@ def load_delimited_rows(content: bytes, suffix: str) -> list[list[str]]:
     return rows
 
 
-def load_tabular_rows(content: bytes, filename: str = "", content_type: str = "") -> list[list[str]]:
+def load_tabular_rows(
+    content: bytes, filename: str = "", content_type: str = ""
+) -> list[list[str]]:
     """按文件类型读取第一张工作表 / 文本表格。
 
     支持：
@@ -120,7 +126,11 @@ def load_tabular_rows(content: bytes, filename: str = "", content_type: str = ""
         return load_xls_rows(content)
 
     guessed_text_type = content_type.lower()
-    if "csv" in guessed_text_type or "text/plain" in guessed_text_type or "text/" in guessed_text_type:
+    if (
+        "csv" in guessed_text_type
+        or "text/plain" in guessed_text_type
+        or "text/" in guessed_text_type
+    ):
         return load_delimited_rows(content, suffix)
 
     raise ValueError("当前仅支持导入 .xlsx、.xls、.csv、.txt 文件")

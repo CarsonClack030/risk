@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from risk_backend.models.entities import Pollutant, PollutantConcentration, SelectedPollutant, to_decimal
+from risk_backend.models.entities import (
+    Pollutant,
+    PollutantConcentration,
+    SelectedPollutant,
+    to_decimal,
+)
 from risk_backend.repositories.database import connect
-
 
 # 这些表都是“与当前工作区强相关”的运行时表。
 # 一个污染物被加入工作区后，除了目录临时表和浓度表以外，
@@ -86,7 +90,9 @@ class WorkspaceRepository:
                 surface_concentration=to_decimal(row["Surface_con"]),
                 lower_soil_concentration=to_decimal(row["Lower_soil_con"]),
                 groundwater_concentration=to_decimal(row["Groundwater_con"]),
-                groundwater_protection_concentration=to_decimal(row["Groundwater_pro_con"]),
+                groundwater_protection_concentration=to_decimal(
+                    row["Groundwater_pro_con"]
+                ),
             )
             selected.append(
                 SelectedPollutant(
@@ -146,7 +152,12 @@ class WorkspaceRepository:
         for table in RESULT_TABLES:
             con.execute(
                 f"insert into {table} (number, ID, p_name, e_name) values (?, ?, ?, ?)",
-                (workspace_number, pollutant.id, pollutant.name, pollutant.english_name),
+                (
+                    workspace_number,
+                    pollutant.id,
+                    pollutant.name,
+                    pollutant.english_name,
+                ),
             )
         concentration = PollutantConcentration(
             workspace_number=workspace_number,
@@ -156,7 +167,9 @@ class WorkspaceRepository:
             surface_concentration=to_decimal(surface_concentration),
             lower_soil_concentration=to_decimal(lower_soil_concentration),
             groundwater_concentration=to_decimal(groundwater_concentration),
-            groundwater_protection_concentration=to_decimal(groundwater_protection_concentration),
+            groundwater_protection_concentration=to_decimal(
+                groundwater_protection_concentration
+            ),
         )
         return SelectedPollutant(
             workspace_number=workspace_number,
@@ -189,19 +202,20 @@ class WorkspaceRepository:
         Excel 导入的核心目标是“少开连接、少做往返”。
         因此这里把多条记录放进同一事务里一次性写完。
         """
-        imported: list[SelectedPollutant] = []
         with connect() as con:
-            for entry in entries:
-                imported.append(
-                    self._insert_workspace_row(
-                        con,
-                        entry["pollutant"],
-                        surface_concentration=entry["surface_concentration"],
-                        lower_soil_concentration=entry["lower_soil_concentration"],
-                        groundwater_concentration=entry["groundwater_concentration"],
-                        groundwater_protection_concentration=entry["groundwater_protection_concentration"],
-                    )
+            imported = [
+                self._insert_workspace_row(
+                    con,
+                    entry["pollutant"],
+                    surface_concentration=entry["surface_concentration"],
+                    lower_soil_concentration=entry["lower_soil_concentration"],
+                    groundwater_concentration=entry["groundwater_concentration"],
+                    groundwater_protection_concentration=entry[
+                        "groundwater_protection_concentration"
+                    ],
                 )
+                for entry in entries
+            ]
         return imported
 
     def remove_workspace_row(self, workspace_number: int) -> None:
@@ -214,7 +228,9 @@ class WorkspaceRepository:
             con.execute("delete from db_pol_temp where number = ?", (workspace_number,))
             con.execute("delete from db_pol_con where number = ?", (workspace_number,))
             for table in RESULT_TABLES:
-                con.execute(f"delete from {table} where number = ?", (workspace_number,))
+                con.execute(
+                    f"delete from {table} where number = ?", (workspace_number,)
+                )
 
     def clear_workspace(self) -> None:
         """清空整个工作区。"""

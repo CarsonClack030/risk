@@ -4,17 +4,16 @@ import os
 import tempfile
 import unittest
 
-
 # 测试数据库必须放进临时目录，不能读写用户正在使用的正式工作区数据库。
 TEST_DATA_DIR = tempfile.TemporaryDirectory()
 os.environ["RISK_APP_DATA_DIR"] = TEST_DATA_DIR.name
 
+from risk_backend.application import RiskBackend  # noqa: E402
 from risk_backend.repositories.catalog import (  # noqa: E402
     CatalogRepository,
     _normalize_pollutant_name,
     _pollutant_name_search_anchor,
 )
-from risk_backend.api_server import RiskBackend  # noqa: E402
 
 
 class PollutantNameNormalizationTests(unittest.TestCase):
@@ -72,7 +71,7 @@ class CatalogNameLookupTests(unittest.TestCase):
 class WorkspaceImportMatchingTests(unittest.TestCase):
     def test_csv_import_accepts_reordered_cis_name(self) -> None:
         backend = RiskBackend()
-        content = "污染物名称,地表浓度\n顺式12二氯乙烯,1.25\n".encode("utf-8")
+        content = "污染物名称,地表浓度\n顺式12二氯乙烯,1.25\n".encode()
 
         payload = backend.import_workspace_file(
             content,

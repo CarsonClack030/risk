@@ -1,6 +1,5 @@
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 # 这个文件是后端的极简启动入口。
 # 它只做两件事：
@@ -11,8 +10,8 @@ SRC_DIR = CURRENT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from risk_backend.api_server import main
-
+# 必须先把 backend/src 加入 sys.path，PyInstaller 才能发现并打包后端模块。
+from risk_backend.api_server import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

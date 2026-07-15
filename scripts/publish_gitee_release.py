@@ -4,19 +4,18 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import mimetypes
 import os
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
-
 
 API_BASE_URL = "https://gitee.com/api/v5"
 RELEASE_SUFFIXES = {".dmg", ".exe"}
@@ -102,7 +101,9 @@ class GiteeClient:
                 f"Gitee Pull mirror trigger failed ({exc.code}): {details}",
             ) from exc
         except URLError as exc:
-            raise RuntimeError(f"Unable to trigger Gitee Pull mirror: {exc.reason}") from exc
+            raise RuntimeError(
+                f"Unable to trigger Gitee Pull mirror: {exc.reason}"
+            ) from exc
 
         print("Gitee Pull mirror sync requested")
 
@@ -154,7 +155,9 @@ class GiteeClient:
 
     def upload_attachment(self, release_id: int, file_path: Path) -> dict[str, Any]:
         boundary = f"----risk-studio-{uuid.uuid4().hex}"
-        mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        mime_type = (
+            mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        )
         body = b"".join(
             [
                 f"--{boundary}\r\n".encode(),
@@ -256,14 +259,18 @@ def main(argv: list[str] | None = None) -> int:
         pending = {}
         for asset in assets:
             print(f"Uploading Gitee asset: {asset.name} ({asset.stat().st_size} bytes)")
-            pending[executor.submit(client.upload_attachment, release_id, asset)] = asset
+            pending[executor.submit(client.upload_attachment, release_id, asset)] = (
+                asset
+            )
 
         for future in as_completed(pending):
             asset = pending[future]
             uploaded = future.result()
             print(f"Uploaded: {uploaded.get('browser_download_url', asset.name)}")
 
-    print(f"Gitee Release published: https://gitee.com/{args.owner}/{args.repo}/releases/tag/{args.tag}")
+    print(
+        f"Gitee Release published: https://gitee.com/{args.owner}/{args.repo}/releases/tag/{args.tag}"
+    )
     return 0
 
 

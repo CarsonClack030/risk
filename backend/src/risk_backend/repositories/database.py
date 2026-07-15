@@ -4,10 +4,9 @@ import os
 import shutil
 import sqlite3
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-
 
 # 这个文件负责“运行数据库”的生命周期管理。
 # 模板数据库是只读资源，真正运行时会复制到用户目录下，
@@ -126,13 +125,3 @@ def connect() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         connection.close()
-
-
-def reset_runtime_database() -> Path:
-    """删除运行库并重新从模板复制。
-
-    这个函数更适合测试、调试或“恢复出厂状态”的场景。
-    """
-    if RUNTIME_DB.exists():
-        RUNTIME_DB.unlink()
-    return ensure_database()

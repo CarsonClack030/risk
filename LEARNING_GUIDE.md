@@ -36,9 +36,12 @@
 建议先对照下面这棵“重要目录树”看：
 
 ```text
-risk_tauri/
+risk/
 ├── src/                              # React 前端
-│   ├── App.jsx                       # 主界面与主状态管理
+│   ├── App.jsx                       # 状态协调与业务操作
+│   ├── AppPanels.jsx                 # 主页面展示区块
+│   ├── AppDialogs.jsx                # 参数、结果、管理员等业务弹窗
+│   ├── appHelpers.js                 # 纯数据转换与默认状态工厂
 │   ├── api.js                        # 前端请求封装
 │   ├── components.jsx                # 通用组件
 │   ├── constants.js                  # 表头、路径、表单字段等静态配置
@@ -52,7 +55,10 @@ risk_tauri/
 │   ├── main.py                       # Python 启动入口
 │   ├── build_sidecar.py              # 打包 sidecar 的脚本
 │   └── src/risk_backend/
-│       ├── api_server.py             # Python HTTP 接口层
+│       ├── api_server.py             # 只负责 HTTP 收发与路由
+│       ├── application.py            # 面向界面操作的业务门面
+│       ├── serialization.py          # 实体与结果表序列化
+│       ├── workspace_import.py       # 表格导入规则与模板
 │       ├── exporters.py              # Excel 导出
 │       ├── xlsx.py                   # 轻量 Excel 导入解析
 │       ├── models/entities.py        # 数据模型
@@ -145,10 +151,10 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 职责：
 
-- 接收前端发来的请求
-- 解析 JSON
-- 调用数据库层和计算层
-- 把结果变成 JSON 返回前端
+- `api_server.py` 接收请求、解析 HTTP 数据并返回响应
+- `application.py` 组织工作区、参数、计算和管理员用例
+- `serialization.py` 统一前端 JSON 与结果表结构
+- `workspace_import.py` 负责表头识别、污染物匹配和批量导入
 
 ### 3.4 数据与公式层：Repository + Service
 
@@ -174,6 +180,8 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 - `src/main.jsx`
 - `src/App.jsx`
+- `src/AppPanels.jsx`
+- `src/AppDialogs.jsx`
 
 为什么先看这里：
 
@@ -216,12 +224,16 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 文件：
 
 - `backend/src/risk_backend/api_server.py`
+- `backend/src/risk_backend/application.py`
+- `backend/src/risk_backend/serialization.py`
+- `backend/src/risk_backend/workspace_import.py`
 
 重点关注：
 
 - 前端每个操作最后落到哪个 HTTP 路由
-- `RiskBackend` 这一层如何组织业务
-- 结果表为什么要做统一序列化配置
+- HTTP 路由如何保持轻量
+- `RiskBackend` 如何组织业务
+- 导入规则和结果序列化为什么独立维护
 
 ### 第 5 步：看数据模型
 
@@ -297,7 +309,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端链路：
 
-- `api_server.py -> list_catalog()`
+- `api_server.py -> RiskBackend.list_catalog()`
 - `CatalogRepository.list_pollutants()`
 
 结果：
@@ -314,7 +326,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端链路：
 
-- `api_server.py -> add_workspace_item()`
+- `api_server.py -> RiskBackend.add_workspace_item()`
 - `WorkspaceRepository.add_pollutant()`
 
 接口返回：
@@ -343,7 +355,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端链路：
 
-- `api_server.py -> update_concentrations()`
+- `api_server.py -> RiskBackend.update_concentrations()`
 - `WorkspaceRepository.update_concentrations()`
 
 结果：
@@ -376,7 +388,8 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端链路：
 
-- `api_server.py -> import_workspace_file()`
+- `api_server.py -> RiskBackend.import_workspace_file()`
+- `workspace_import.py -> WorkspaceImporter.import_file()`
 - `tabular_import.py -> load_tabular_rows()`
 - `WorkspaceRepository.import_pollutants()`
 
@@ -384,7 +397,8 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 - `src/App.jsx -> handleDownloadImportTemplate()`
 - `src/fileTransfers.js -> saveExcelBlob()`
-- `api_server.py -> export_workspace_import_template()`
+- `api_server.py -> RiskBackend.export_workspace_import_template()`
+- `workspace_import.py -> WorkspaceImporter.build_template()`
 
 模板不会再直接写入默认下载目录。桌面版先显示系统“另存为”窗口，用户选定文件名和目录后，
 前端才通过 `writeFile()` 写入；如果用户取消窗口，则不写文件，也不显示成功提示。
@@ -433,7 +447,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端链路：
 
-- `api_server.py -> calculate()`
+- `api_server.py -> RiskBackend.calculate()`
 - `RiskCalculator.calculate()`
 - `RiskCalculator.validate_parameters()`
 - `RiskCalculator._calculate_single()`
@@ -458,7 +472,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端来源：
 
-- `serialize_results()`
+- `serialization.py -> serialize_results()`
 
 结果类型：
 
@@ -472,7 +486,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 结果标签切换时，`DataTable` 的表头使用“列序号 + 列名”作为 React key。部分结果表存在两个同名的
 “合计”列，如果只用列名作为 key，React 可能把旧表头错误复用到“风险控制值”表中。
-`App.jsx` 还会使用结果表 key 重新建立表格实例，确保不同列结构之间不会互相残留。
+`AppDialogs.jsx` 还会使用结果表 key 重新建立表格实例，确保不同列结构之间不会互相残留。
 
 结果行的身份和排序必须使用工作区序号 `number`，不能使用污染物库编号 `ID`：
 
@@ -486,7 +500,7 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 后端链路：
 
-- `api_server.py -> export_results()`
+- `api_server.py -> RiskBackend.export_results()`
 - `build_export_rows()`
 - `build_xlsx()`
 
@@ -678,6 +692,8 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 优先看：
 
 - `src/App.jsx`
+- `src/AppPanels.jsx`
+- `src/AppDialogs.jsx`
 - `src/components.jsx`
 - `src/styles.css`
 
@@ -687,12 +703,14 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 - `src/api.js`
 - `backend/src/risk_backend/api_server.py`
+- `backend/src/risk_backend/application.py`
 
 开发顺序建议：
 
-1. 前端先定义调用方法
-2. 后端加路由
-3. 仓储层或服务层补逻辑
+1. 在 `src/api.js` 定义调用方法
+2. 在 `api_server.py` 增加轻量路由
+3. 在 `application.py` 组织业务用例
+4. 在仓储层或服务层补充具体逻辑
 
 ### 9.3 想改公式
 
@@ -761,9 +779,12 @@ Gitee 访问令牌由 GitHub Actions Secret `GITEE_ACCESS_TOKEN` 注入，脚本
 
 - `README.md`
 - `src/App.jsx`
+- `src/AppPanels.jsx`
+- `src/AppDialogs.jsx`
 - `src/api.js`
 - `src-tauri/src/main.rs`
 - `backend/src/risk_backend/api_server.py`
+- `backend/src/risk_backend/application.py`
 
 ### 第二天：看懂数据层
 

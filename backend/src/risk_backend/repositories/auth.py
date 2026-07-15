@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from risk_backend.models.entities import User
 from risk_backend.repositories.database import connect
 
 

@@ -1,23 +1,52 @@
-import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
-import { api } from "./api";
-import { Modal, MetricCard, DataTable } from "./components";
 import {
-  CATALOG_HEADERS,
-  CATALOG_PICKER_HEADERS,
-  CONCENTRATION_COLUMNS,
-  PARAMETER_COLUMNS,
-  PATHWAYS,
-  POLLUTANT_FORM_FIELDS,
-  WORKSPACE_HEADERS,
-} from "./constants";
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
+import { api } from "./api";
+import { PATHWAYS } from "./constants";
+import {
+  AdminLoginDialog,
+  AdminPanelDialog,
+  ConcentrationDialog,
+  ErrorDialog,
+  ParameterDialog,
+  ResultDialog,
+  UpdateDialog,
+} from "./AppDialogs";
+import {
+  ActionDeck,
+  AppHeader,
+  CatalogPanel,
+  MetricsPanel,
+  SiteControls,
+  SplashScreen,
+  WorkspacePanel,
+} from "./AppPanels";
+import {
+  adminRows,
+  catalogRows,
+  CATALOG_DISPLAY_LIMIT,
+  CATALOG_SUGGESTION_LIMIT,
+  cloneData,
+  createEmptyPathways,
+  createEmptyPollutantForm,
+  normalizeLoadError,
+  pollutantToAdminForm,
+  workspaceRows,
+  workspaceToConcentrationDraft,
+} from "./appHelpers";
 import {
   filenameFromPath,
   hasSupportedImportExtension,
   importContentType,
-  isTauriRuntime,
   pickWorkspaceImportFile,
   saveExcelBlob,
 } from "./fileTransfers";
+import { isTauriRuntime } from "./runtime";
 import {
   checkForUpdates,
   getCurrentAppVersion,
@@ -25,71 +54,7 @@ import {
   PACKAGE_VERSION,
 } from "./updateService";
 
-// App 是整个前端的主控组件。
-// 这个文件同时承担了几件事：
-// 1. 页面首次启动时，向后端拉取工作区、参数和结果。
-// 2. 维护目录搜索、工作区、参数弹窗、结果弹窗、管理员弹窗等状态。
-// 3. 在用户点击按钮后，调用 api.js 中封装好的后端接口。
-//
-// 也就是说，如果把前端比作一个办公室：
-// - constants.js 提供“表格表头和静态配置”
-// - api.js 提供“对外联络电话”
-// - components.jsx 提供“可复用家具”
-// - App.jsx 则像“总协调人”，负责让所有环节按顺序运转。
-const CATALOG_DISPLAY_LIMIT = 20;
-
-// 深拷贝工具：
-// 参数弹窗、浓度弹窗里编辑的是“草稿数据”，不能直接改原始状态，
-// 否则用户一边输入、一边就把正式数据改掉了。
-// 因此这里统一做一次深拷贝，保证“编辑”和“保存”这两个动作彼此独立。
-function cloneData(value) {
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value));
-}
-
-// 管理员面板里新增污染物时，需要准备一份空白表单。
-// 这里把默认值集中定义，后面“清空表单”和“新建表单初始化”都直接复用。
-function emptyPollutantForm() {
-  return {
-    name: "",
-    english_name: "",
-    henry: 0,
-    da: 0,
-    dw: 0,
-    koc: 0,
-    solubility: 0,
-    sfo: 0,
-    iur: 0,
-    rfdo: 0,
-    rfc: 0,
-    absgi: 0,
-    absd: 0,
-    saf: 1,
-    kp: 0,
-  };
-}
-
-// 统计当前启用了多少条暴露途径。
-// 首页指标卡和底部汇总文案都会用到这个数字。
-function summarizePathways(pathways) {
-  return PATHWAYS.filter((item) => pathways[item.key]).length;
-}
-
-// DataTable 组件期望收到统一结构的 rows，
-// 因此这里用一个轻量工具把业务对象转成表格行。
-function toRows(items, mapper) {
-  return items.map(mapper);
-}
-
-function normalizeLoadError(error) {
-  if (error?.message === "Load failed") {
-    return new Error("后端启动稍慢或连接暂时失败，请稍后再试一次。");
-  }
-  return error;
-}
-
+// App 只协调状态和用例；具体页面区块与弹窗分别位于 AppPanels/AppDialogs。
 function App() {
   // ------------------------
   // 启动与全局反馈状态
@@ -141,9 +106,7 @@ function App() {
   // pathways: 暴露途径勾选矩阵
   const [standard, setStandard] = useState("G");
   const [areaType, setAreaType] = useState("I");
-  const [pathways, setPathways] = useState(
-    Object.fromEntries(PATHWAYS.map((item) => [item.key, false])),
-  );
+  const [pathways, setPathways] = useState(createEmptyPathways);
 
   // ------------------------
   // 参数弹窗状态
@@ -173,7 +136,7 @@ function App() {
   const [adminKeyword, setAdminKeyword] = useState("");
   const [adminItems, setAdminItems] = useState([]);
   const [selectedAdminId, setSelectedAdminId] = useState(null);
-  const [adminForm, setAdminForm] = useState(emptyPollutantForm());
+  const [adminForm, setAdminForm] = useState(createEmptyPollutantForm);
   const [passwordForm, setPasswordForm] = useState({
     old_password: "",
     new_password: "",
@@ -184,6 +147,8 @@ function App() {
   // 这样用户可以连续录入多个污染物。
   const catalogInputRef = useRef(null);
   const workspaceImportInputRef = useRef(null);
+  const catalogRequestIdRef = useRef(0);
+  const adminRequestIdRef = useRef(0);
   // 用 ref 标记正在进行的更新请求，避免启动检查和用户点击恰好同时发出两次请求。
   const updateCheckInFlightRef = useRef(false);
 
@@ -200,6 +165,12 @@ function App() {
   const selectedAdminItem = adminItems.find((item) => item.id === selectedAdminId) || null;
   const allPathwaysSelected = PATHWAYS.every((item) => pathways[item.key]);
 
+  // Effect Events 始终读取最新状态，同时不会成为 useEffect 的依赖项。
+  const runUpdateCheckEvent = useEffectEvent(runUpdateCheck);
+  const waitForHealthEvent = useEffectEvent(waitForHealth);
+  const refreshCatalogEvent = useEffectEvent(refreshCatalog);
+  const refreshAdminCatalogEvent = useEffectEvent(refreshAdminCatalog);
+
   // 桌面运行时读取安装包中的真实版本，随后立即静默检查一次 Gitee Release。
   // “静默”只表示网络失败或没有更新时不打断启动；发现新版本仍会正常弹窗询问。
   useEffect(() => {
@@ -210,7 +181,7 @@ function App() {
         return;
       }
       setAppVersion(version);
-      await runUpdateCheck(version, {
+      await runUpdateCheckEvent(version, {
         silent: true,
         isCancelled: () => cancelled,
       });
@@ -238,7 +209,7 @@ function App() {
     let cancelled = false;
     async function bootstrap() {
       try {
-        const alive = await waitForHealth();
+        const alive = await waitForHealthEvent();
         if (cancelled) {
           return;
         }
@@ -277,7 +248,7 @@ function App() {
     if (booting) {
       return;
     }
-    refreshCatalog(deferredCatalogKeyword);
+    refreshCatalogEvent(deferredCatalogKeyword);
   }, [booting, deferredCatalogKeyword]);
 
   // 管理员面板打开后，管理员搜索框的关键词变化也会触发查询。
@@ -285,7 +256,7 @@ function App() {
     if (!adminPanelOpen) {
       return;
     }
-    refreshAdminCatalog(deferredAdminKeyword);
+    refreshAdminCatalogEvent(deferredAdminKeyword);
   }, [adminPanelOpen, deferredAdminKeyword]);
 
   // 这个 effect 专门处理搜索建议的“默认高亮项”。
@@ -293,7 +264,7 @@ function App() {
   // - 如果之前已经有选中项，就尽量把它对应的建议高亮起来；
   // - 如果没有，就默认高亮第一项，方便用户直接回车。
   useEffect(() => {
-    const suggestions = catalogItems.slice(0, 8);
+    const suggestions = catalogItems.slice(0, CATALOG_SUGGESTION_LIMIT);
     if (!catalogPickerOpen || suggestions.length === 0) {
       setCatalogActiveIndex(-1);
       return;
@@ -313,23 +284,7 @@ function App() {
     if (!selectedAdminItem) {
       return;
     }
-    setAdminForm({
-      name: selectedAdminItem.name,
-      english_name: selectedAdminItem.english_name,
-      henry: selectedAdminItem.henry,
-      da: selectedAdminItem.da,
-      dw: selectedAdminItem.dw,
-      koc: selectedAdminItem.koc,
-      solubility: selectedAdminItem.solubility,
-      sfo: selectedAdminItem.sfo,
-      iur: selectedAdminItem.iur,
-      rfdo: selectedAdminItem.rfdo,
-      rfc: selectedAdminItem.rfc,
-      absgi: selectedAdminItem.absgi,
-      absd: selectedAdminItem.absd,
-      saf: selectedAdminItem.saf,
-      kp: selectedAdminItem.kp,
-    });
+    setAdminForm(pollutantToAdminForm(selectedAdminItem));
   }, [selectedAdminItem]);
 
   // 工作区新增高亮只保留短短一段时间，
@@ -389,10 +344,7 @@ function App() {
       } else if (!silent && update.status === "ahead") {
         flash("success", `当前版本 v${currentVersion} 高于 Gitee 已发布版本`);
       } else if (!silent) {
-        flash(
-          "success",
-          "Gitee 暂无可读取的正式 Release，请确认仓库已公开并完成版本发布。",
-        );
+        flash("success", "Gitee 暂无可读取的正式 Release，请确认仓库已公开并完成版本发布。");
       }
     } catch (loadError) {
       if (!silent && !isCancelled()) {
@@ -432,6 +384,7 @@ function App() {
   // 重置目录搜索态。
   // 这里不仅清空关键词，也会把建议框、高亮项、已选污染物一起复位。
   function resetCatalogSearch({ focus = false } = {}) {
+    catalogRequestIdRef.current += 1;
     startTransition(() => {
       setCatalogItems([]);
     });
@@ -454,8 +407,12 @@ function App() {
       resetCatalogSearch();
       return;
     }
+    const requestId = ++catalogRequestIdRef.current;
     try {
       const payload = await api.listCatalog(trimmed);
+      if (requestId !== catalogRequestIdRef.current) {
+        return;
+      }
       startTransition(() => {
         setCatalogItems(payload.items);
       });
@@ -486,6 +443,15 @@ function App() {
     setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
   }
 
+  async function handleRefreshWorkspace() {
+    try {
+      await refreshWorkspace();
+      flash("success", "工作区已同步");
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
+  }
+
   // 重新读取结果表。
   // 因为后端的计算结果最终落在数据库结果表中，前端只负责重新显示。
   async function refreshResults() {
@@ -498,8 +464,12 @@ function App() {
 
   // 管理员污染物库查询。
   async function refreshAdminCatalog(keyword = "") {
+    const requestId = ++adminRequestIdRef.current;
     try {
       const payload = await api.listCatalog(keyword);
+      if (requestId !== adminRequestIdRef.current) {
+        return;
+      }
       startTransition(() => {
         setAdminItems(payload.items);
       });
@@ -541,7 +511,8 @@ function App() {
       } else {
         await refreshWorkspace();
       }
-      const addedWorkspaceNumber = payload.added_workspace_number ?? payload.item?.workspace_number ?? null;
+      const addedWorkspaceNumber =
+        payload.added_workspace_number ?? payload.item?.workspace_number ?? null;
       setSelectedWorkspaceNumber(addedWorkspaceNumber);
       setHighlightedWorkspaceNumber(addedWorkspaceNumber);
       resetCatalogSearch({ focus: true });
@@ -594,11 +565,6 @@ function App() {
     }
   }
 
-  // 点击表格行时，仅同步选中状态，不直接写工作区。
-  function selectCatalogItem(item) {
-    syncCatalogSelection(item);
-  }
-
   // 搜索框键盘交互：
   // Esc: 关闭建议
   // ↑/↓: 移动高亮项
@@ -628,9 +594,7 @@ function App() {
       }
       event.preventDefault();
       setCatalogPickerOpen(true);
-      setCatalogActiveIndex((current) =>
-        current <= 0 ? 0 : Math.max(current - 1, 0),
-      );
+      setCatalogActiveIndex((current) => (current <= 0 ? 0 : Math.max(current - 1, 0)));
       return;
     }
 
@@ -694,7 +658,10 @@ function App() {
     setSelectedWorkspaceNumber(lastImported);
     setHighlightedWorkspaceNumber(lastImported);
     setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
-    flash("success", `已从 ${filename} 导入 ${payload.imported || payload.items?.length || 0} 条污染物`);
+    flash(
+      "success",
+      `已从 ${filename} 导入 ${payload.imported || payload.items?.length || 0} 条污染物`,
+    );
   }
 
   // 浏览器调试模式的文件输入回调。桌面应用不会走这里，
@@ -720,7 +687,7 @@ function App() {
       setWorkspaceItems(payload.items);
       setSelectedWorkspaceNumber(null);
       setHighlightedWorkspaceNumber(null);
-      setPathways(Object.fromEntries(PATHWAYS.map((item) => [item.key, false])));
+      setPathways(createEmptyPathways());
       await refreshResults();
       flash("success", "工作区已重置");
       setHealth((current) => ({ ...(current || {}), workspace_count: payload.total }));
@@ -742,21 +709,7 @@ function App() {
       flash("error", "工作区为空，先添加污染物");
       return;
     }
-    setConcentrationDraft(
-      cloneData(
-        workspaceItems.map((item) => ({
-          workspace_number: item.workspace_number,
-          pollutant_id: item.concentration.pollutant_id,
-          name: item.concentration.name,
-          english_name: item.concentration.english_name,
-          surface_concentration: item.concentration.surface_concentration,
-          lower_soil_concentration: item.concentration.lower_soil_concentration,
-          groundwater_concentration: item.concentration.groundwater_concentration,
-          groundwater_protection_concentration:
-            item.concentration.groundwater_protection_concentration,
-        })),
-      ),
-    );
+    setConcentrationDraft(cloneData(workspaceToConcentrationDraft(workspaceItems)));
     setConcentrationModalOpen(true);
   }
 
@@ -869,7 +822,7 @@ function App() {
         await api.updatePollutant(selectedAdminItem.id, { ...adminForm, keyword: adminKeyword });
         flash("success", "污染物已更新");
       }
-      setAdminForm(emptyPollutantForm());
+      setAdminForm(createEmptyPollutantForm());
       setSelectedAdminId(null);
       await Promise.all([refreshAdminCatalog(adminKeyword), refreshCatalog(catalogKeyword)]);
     } catch (loadError) {
@@ -888,7 +841,7 @@ function App() {
     }
     try {
       await api.deletePollutant(selectedAdminItem.id, adminKeyword);
-      setAdminForm(emptyPollutantForm());
+      setAdminForm(createEmptyPollutantForm());
       setSelectedAdminId(null);
       await Promise.all([refreshAdminCatalog(adminKeyword), refreshCatalog(catalogKeyword)]);
       flash("success", "污染物已删除");
@@ -920,18 +873,11 @@ function App() {
 
   // 一键勾选全部暴露途径。
   function handleSelectAllPathways() {
-    setPathways(Object.fromEntries(PATHWAYS.map((item) => [item.key, true])));
+    setPathways(createEmptyPathways(true));
   }
 
-  // ------------------------
-  // 下面开始构造表格显示数据
-  // ------------------------
-  const catalogRows = toRows(catalogItems, (item) => ({
-    key: item.id,
-    cells: [item.id, item.name, item.english_name],
-  }));
-  const visibleCatalogRows = catalogRows.slice(0, CATALOG_DISPLAY_LIMIT);
-  const catalogSuggestions = catalogItems.slice(0, 8);
+  const visibleCatalogRows = catalogRows(catalogItems).slice(0, CATALOG_DISPLAY_LIMIT);
+  const catalogSuggestions = catalogItems.slice(0, CATALOG_SUGGESTION_LIMIT);
   const showingLimitedCatalog = catalogMatchCount > CATALOG_DISPLAY_LIMIT;
   const catalogHint = !catalogKeyword.trim()
     ? "输入中文名或英文名后再查询，这里不会默认列出全部污染物。"
@@ -948,55 +894,8 @@ function App() {
     ? `${selectedCatalogItem.name} / ${selectedCatalogItem.english_name || "暂无英文名"}`
     : "还没有选中污染物";
 
-  const workspaceRows = toRows(workspaceItems, (item) => ({
-    key: item.workspace_number,
-    cells: [
-      item.workspace_number,
-      item.pollutant.id,
-      item.pollutant.name,
-      item.pollutant.english_name,
-      item.concentration.surface_concentration,
-      item.concentration.lower_soil_concentration,
-      item.concentration.groundwater_concentration,
-      item.concentration.groundwater_protection_concentration,
-    ],
-  }));
-
-  const adminRows = toRows(adminItems, (item) => ({
-    key: item.id,
-    cells: [
-      item.id,
-      item.name,
-      item.english_name,
-      item.henry,
-      item.da,
-      item.dw,
-      item.koc,
-      item.solubility,
-      item.sfo,
-      item.iur,
-      item.rfdo,
-      item.rfc,
-      item.absgi,
-      item.absd,
-      item.saf,
-      item.kp,
-    ],
-  }));
-
-  const activeResult = results.find((table) => table.key === activeResultKey) || results[0];
-
-  // 启动遮罩：只在最开始健康检查和初次数据加载期间显示。
   if (booting) {
-    return (
-      <div className="splash-screen">
-        <div className="splash-card">
-          <span>Risk Studio</span>
-          <h1>正在启动本地桌面工作台</h1>
-          <p>界面和 Python 计算服务正在建立连接，这一步通常只需要几秒。</p>
-        </div>
-      </div>
-    );
+    return <SplashScreen />;
   }
 
   return (
@@ -1004,717 +903,151 @@ function App() {
       <div className="bg-orb orb-one" />
       <div className="bg-orb orb-two" />
 
-      {/* 顶部标题区：保留了桌面工作台常用的“标题 + 快捷操作”结构。 */}
-      <header className="hero-panel">
-        <div className="hero-title-row">
-          <h1>污染场地风险评估系统</h1>
-          <span className="version-badge" title="当前软件版本">
-            v{appVersion}
-          </span>
-        </div>
-        <div className="hero-actions">
-          <button
-            className="ghost-button"
-            disabled={checkingUpdate}
-            onClick={handleCheckForUpdates}
-            type="button"
-          >
-            {checkingUpdate ? "检查中..." : "检查更新"}
-          </button>
-          <button className="ghost-button" onClick={openParameterModal} type="button">
-            参数设置
-          </button>
-          <button className="ghost-button" onClick={handleOpenAdmin} type="button">
-            污染物数据库
-          </button>
-          <button className="primary-button" onClick={() => setResultModalOpen(true)} type="button">
-            查看结果
-          </button>
-        </div>
-      </header>
+      <AppHeader
+        version={appVersion}
+        checkingUpdate={checkingUpdate}
+        onCheckUpdate={handleCheckForUpdates}
+        onOpenParameters={openParameterModal}
+        onOpenAdmin={handleOpenAdmin}
+        onOpenResults={() => setResultModalOpen(true)}
+      />
 
       {notice ? <section className={`banner ${notice.kind}-banner`}>{notice.text}</section> : null}
 
-      {/* 指标卡区：帮助用户快速确认当前运行状态。 */}
-      <section className="metrics-grid">
-        <MetricCard
-          label="工作区污染物"
-          value={workspaceItems.length}
-          hint={workspaceItems.length ? "已接入浓度与结果联动" : "从左侧目录添加后开始计算"}
-          tone="teal"
-        />
-        <MetricCard
-          label="污染物总量"
-          value={health?.catalog_count || catalogItems.length}
-          hint="内置数据库已嵌入本地运行目录"
-          tone="amber"
-        />
-        <MetricCard
-          label="暴露途径"
-          value={summarizePathways(pathways)}
-          hint="至少启用一个途径才会执行计算"
-          tone="slate"
-        />
-        <MetricCard
-          label="运行数据库"
-          value={health?.status === "ok" ? "在线" : "未连接"}
-          hint={health?.database || "等待初始化"}
-          tone="teal"
-        />
-      </section>
+      <MetricsPanel
+        workspaceCount={workspaceItems.length}
+        catalogCount={health?.catalog_count || catalogItems.length}
+        pathways={pathways}
+        health={health}
+      />
 
-      {/* 控制区：把暴露途径单独放到第二排，避免长标签和上面的两个选择区挤在一起。 */}
-      <section className="control-stack">
-        <div className="control-panel control-panel-top">
-          <div className="control-card">
-            <span>用地类型</span>
-            <div className="segmented">
-              <button
-                className={areaType === "I" ? "segment active" : "segment"}
-                onClick={() => setAreaType("I")}
-                type="button"
-              >
-                第一类用地
-              </button>
-              <button
-                className={areaType === "II" ? "segment active" : "segment"}
-                onClick={() => setAreaType("II")}
-                type="button"
-              >
-                第二类用地
-              </button>
-            </div>
-          </div>
+      <SiteControls
+        areaType={areaType}
+        standard={standard}
+        pathways={pathways}
+        allPathwaysSelected={allPathwaysSelected}
+        onAreaTypeChange={setAreaType}
+        onStandardChange={setStandard}
+        onPathwaysChange={setPathways}
+        onSelectAllPathways={handleSelectAllPathways}
+      />
 
-          <div className="control-card">
-            <span>适用标准</span>
-            <div className="segmented">
-              <button
-                className={standard === "G" ? "segment active" : "segment"}
-                onClick={() => setStandard("G")}
-                type="button"
-              >
-                国家标准
-              </button>
-              <button
-                className={standard === "Z" ? "segment active" : "segment"}
-                onClick={() => setStandard("Z")}
-                type="button"
-              >
-                浙江标准
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="control-panel control-panel-bottom">
-          <div className="control-card control-card-full">
-            <div className="control-card-head">
-              <span>暴露途径</span>
-              <button
-                className="ghost-button compact-button"
-                disabled={allPathwaysSelected}
-                onClick={handleSelectAllPathways}
-                type="button"
-              >
-                {allPathwaysSelected ? "已全选" : "全选"}
-              </button>
-            </div>
-            <div className="chip-grid">
-              {PATHWAYS.map((item) => (
-                <button
-                  key={item.key}
-                  className={pathways[item.key] ? "chip active" : "chip"}
-                  onClick={() =>
-                    setPathways((current) => ({
-                      ...current,
-                      [item.key]: !current[item.key],
-                    }))
-                  }
-                  type="button"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 主工作台：左边是目录搜索，右边是工作区。 */}
       <main className="workspace-grid">
-        <section className="panel-card">
-          <div className="panel-head">
-            <div>
-              <h2>污染物目录</h2>
-              <p>{catalogHint}</p>
-            </div>
-            <button className="ghost-button" onClick={() => refreshCatalog(catalogKeyword)} type="button">
-              刷新
-            </button>
-          </div>
-          <div className="catalog-search-stack">
-            <div className="toolbar">
-              <div className="search-combobox">
-                <input
-                  ref={catalogInputRef}
-                  className="text-input"
-                  placeholder="搜索污染物中文名或英文名"
-                  value={catalogKeyword}
-                  onChange={(event) => {
-                    setCatalogKeyword(event.target.value);
-                    setCatalogPickerOpen(true);
-                    setCatalogActiveIndex(-1);
-                  }}
-                  onFocus={() => setCatalogPickerOpen(Boolean(catalogKeyword.trim()))}
-                  onBlur={() => {
-                    window.setTimeout(() => setCatalogPickerOpen(false), 120);
-                  }}
-                  onKeyDown={handleCatalogInputKeyDown}
-                />
-                {catalogPickerOpen && catalogKeyword.trim() ? (
-                  <div className="suggestion-popover">
-                    {catalogSuggestions.length ? (
-                      catalogSuggestions.map((item, index) => (
-                        <button
-                          key={item.id}
-                          className={`suggestion-item ${catalogActiveIndex === index ? "is-active" : ""}`}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            // 这里用 onMouseDown 而不是 onClick，
-                            // 是为了避免 input 先失焦、建议框提前关闭，导致点击失效。
-                            void addCatalogItemToWorkspace(item);
-                          }}
-                          onMouseEnter={() => setCatalogActiveIndex(index)}
-                          type="button"
-                        >
-                          <span className="suggestion-title">{item.name}</span>
-                          <span className="suggestion-meta">
-                            <strong>#{item.id}</strong>
-                            <span>{item.english_name || "暂无英文名"}</span>
-                          </span>
-                        </button>
-                      ))
-                    ) : (
-                      <div className="suggestion-empty">没有匹配的污染物</div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-              <button className="secondary-button" onClick={() => refreshCatalog(catalogKeyword)} type="button">
-                查询
-              </button>
-              <button className="primary-button" onClick={handleAddToWorkspace} type="button">
-                加入工作区
-              </button>
-            </div>
-            <div className="catalog-selection-card">
-              <div className="catalog-selection-header">
-                <strong>当前已选</strong>
-                <span>{selectedCatalogItem ? `编号 #${selectedCatalogItem.id}` : "未选择"}</span>
-              </div>
-              <div className="catalog-selection-main">{catalogSelectionLabel}</div>
-              <div className="catalog-selection-sub">
-                {selectedCatalogItem
-                  ? "点击按钮或回车即可加入工作区；加入后会自动清空搜索框，并把光标留在这里方便继续录入。"
-                  : "直接在输入框里键入关键词，点击建议项可直接加入；也支持上下选择和回车加入。"}
-              </div>
-            </div>
-          </div>
-          <div className="catalog-results-head">
-            <strong>快速匹配结果</strong>
-            <span>只显示编号、名称、英文名这三列</span>
-          </div>
-          <DataTable
-            headers={CATALOG_PICKER_HEADERS}
-            rows={visibleCatalogRows}
-            selectedKey={selectedCatalogId}
-            onSelect={setSelectedCatalogId}
-            emptyText={catalogEmptyText}
-          />
-        </section>
-
-        <section className="panel-card">
-          <div className="panel-head">
-            <div>
-              <h2>工作区污染物</h2>
-              <p>
-                {workspaceItems.length
-                  ? `当前已选 ${workspaceItems.length} 个污染物，可继续编辑浓度、导入文件或直接计算。`
-                  : "工作区还没有污染物。先从左侧目录加入，或直接导入一份表格文件。"}
-              </p>
-            </div>
-            <button className="ghost-button" onClick={refreshWorkspace} type="button">
-              同步
-            </button>
-          </div>
-          <input
-            ref={workspaceImportInputRef}
-            accept=".xlsx,.xls,.csv,.txt,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain"
-            hidden
-            type="file"
-            onChange={(event) => {
-              void handleWorkspaceFileImport(event);
-            }}
-          />
-          <DataTable
-            headers={WORKSPACE_HEADERS}
-            rows={workspaceRows}
-            selectedKey={selectedWorkspaceNumber}
-            emphasizedKey={highlightedWorkspaceNumber}
-            autoScrollKey={highlightedWorkspaceNumber}
-            onSelect={setSelectedWorkspaceNumber}
-            emptyText="工作区为空"
-          />
-          <p className="panel-note">
-            支持导入 <strong>.xlsx / .xls / .csv / .txt</strong>；至少填写“编号 / 污染物名称 / 英文名”
-            其中之一；土壤浓度单位为 <strong>mg/kg</strong>，地下水浓度单位为 <strong>mg/L</strong>；
-            浓度列留空按 0 处理，模板示例行即使保留也会自动忽略。
-          </p>
-          <div className="panel-footer">
-            <button className="ghost-button" onClick={handleDownloadImportTemplate} type="button">
-              保存模板
-            </button>
-            <button className="secondary-button" onClick={() => void openWorkspaceImport()} type="button">
-              文件导入
-            </button>
-            <button className="ghost-button" onClick={openConcentrationModal} type="button">
-              编辑浓度
-            </button>
-            <button className="ghost-button" onClick={handleRemoveWorkspace} type="button">
-              移除选中
-            </button>
-            <button className="ghost-button danger" onClick={handleResetWorkspace} type="button">
-              重置工作区
-            </button>
-          </div>
-        </section>
+        <CatalogPanel
+          inputRef={catalogInputRef}
+          keyword={catalogKeyword}
+          hint={catalogHint}
+          pickerOpen={catalogPickerOpen}
+          suggestions={catalogSuggestions}
+          activeIndex={catalogActiveIndex}
+          selectedItem={selectedCatalogItem}
+          selectedId={selectedCatalogId}
+          selectionLabel={catalogSelectionLabel}
+          rows={visibleCatalogRows}
+          emptyText={catalogEmptyText}
+          onKeywordChange={(value) => {
+            setCatalogKeyword(value);
+            setCatalogPickerOpen(true);
+            setCatalogActiveIndex(-1);
+          }}
+          onPickerOpenChange={setCatalogPickerOpen}
+          onActiveIndexChange={setCatalogActiveIndex}
+          onInputKeyDown={handleCatalogInputKeyDown}
+          onAddSuggestion={addCatalogItemToWorkspace}
+          onSelectedIdChange={setSelectedCatalogId}
+          onRefresh={() => refreshCatalog(catalogKeyword)}
+          onAdd={handleAddToWorkspace}
+        />
+        <WorkspacePanel
+          importInputRef={workspaceImportInputRef}
+          items={workspaceItems}
+          rows={workspaceRows(workspaceItems)}
+          selectedNumber={selectedWorkspaceNumber}
+          highlightedNumber={highlightedWorkspaceNumber}
+          onSelectedNumberChange={setSelectedWorkspaceNumber}
+          onImportFile={handleWorkspaceFileImport}
+          onRefresh={handleRefreshWorkspace}
+          onSaveTemplate={handleDownloadImportTemplate}
+          onOpenImport={() => void openWorkspaceImport()}
+          onEditConcentrations={openConcentrationModal}
+          onRemove={handleRemoveWorkspace}
+          onReset={handleResetWorkspace}
+        />
       </main>
 
-      {/* 底部操作条：在用户准备好条件后，通常会从这里发起计算。 */}
-      <footer className="action-deck">
-        <div>
-          <strong>当前选择</strong>
-          <p>
-            {standard === "G" ? "国家标准" : "浙江标准"} ·
-            {areaType === "I" ? " 第一类用地" : " 第二类用地"} ·
-            已勾选 {summarizePathways(pathways)} 条暴露途径
-          </p>
-        </div>
-        <div className="action-buttons">
-          <button className="ghost-button" onClick={() => setResultModalOpen(true)} type="button">
-            查看现有结果
-          </button>
-          <button className="primary-button large" onClick={handleCalculate} type="button">
-            开始计算
-          </button>
-        </div>
-      </footer>
+      <ActionDeck
+        standard={standard}
+        areaType={areaType}
+        pathways={pathways}
+        onOpenResults={() => setResultModalOpen(true)}
+        onCalculate={handleCalculate}
+      />
+      <UpdateDialog
+        update={availableUpdate}
+        onClose={() => setAvailableUpdate(null)}
+        onOpenRelease={handleOpenUpdatePage}
+      />
+      <ErrorDialog message={errorMessage} onClose={() => setErrorMessage("")} />
 
-      {availableUpdate ? (
-        <Modal
-          title="发现新版本"
-          subtitle="是否前往 Gitee 下载新版本安装包？"
-          size="sm"
-          onClose={() => setAvailableUpdate(null)}
-          actions={
-            <>
-              <button className="ghost-button" onClick={() => setAvailableUpdate(null)} type="button">
-                暂不下载
-              </button>
-              <button className="primary-button" onClick={handleOpenUpdatePage} type="button">
-                前往下载
-              </button>
-            </>
-          }
-        >
-          <div className="update-card">
-            <div className="version-comparison">
-              <div>
-                <span>当前版本</span>
-                <strong>v{availableUpdate.currentVersion}</strong>
-              </div>
-              <div>
-                <span>最新版本</span>
-                <strong>v{availableUpdate.latestVersion}</strong>
-              </div>
-            </div>
-            <p className="update-release-name">{availableUpdate.releaseName}</p>
-            {availableUpdate.releaseNotes ? (
-              <div className="update-notes">{availableUpdate.releaseNotes}</div>
-            ) : (
-              <div className="update-notes muted">本次发布暂未填写更新说明。</div>
-            )}
-            <small>确认后将使用系统默认浏览器打开 Gitee Release 页面。</small>
-          </div>
-        </Modal>
-      ) : null}
+      <ParameterDialog
+        open={parameterModalOpen}
+        groups={parameterDraft}
+        activeGroupId={activeParameterGroupId}
+        onActiveGroupChange={setActiveParameterGroupId}
+        onGroupsChange={setParameterDraft}
+        onClose={() => setParameterModalOpen(false)}
+        onReset={handleResetParameters}
+        onSave={handleSaveParameters}
+      />
 
-      {errorMessage ? (
-        <Modal
-          title="操作失败"
-          subtitle="请根据提示检查当前输入、工作区或导入文件。"
-          size="sm"
-          onClose={() => setErrorMessage("")}
-          actions={
-            <button className="primary-button" onClick={() => setErrorMessage("")} type="button">
-              知道了
-            </button>
-          }
-        >
-          <div className="error-modal-copy">{errorMessage}</div>
-        </Modal>
-      ) : null}
+      <ConcentrationDialog
+        open={concentrationModalOpen}
+        items={concentrationDraft}
+        onItemsChange={setConcentrationDraft}
+        onClose={() => setConcentrationModalOpen(false)}
+        onSave={handleSaveConcentrations}
+      />
 
-      {/* 参数弹窗：编辑原有四组参数模板。 */}
-      {parameterModalOpen ? (
-        <Modal
-          title="参数设置"
-          subtitle="四组模板参数仍然写回原有数据表，但编辑方式已经统一。"
-          size="xl"
-          onClose={() => setParameterModalOpen(false)}
-          actions={
-            <>
-              <button className="ghost-button" onClick={handleResetParameters} type="button">
-                恢复默认
-              </button>
-              <button className="primary-button" onClick={handleSaveParameters} type="button">
-                保存参数
-              </button>
-            </>
-          }
-        >
-          <div className="tab-strip">
-            {parameterDraft.map((group) => (
-              <button
-                key={group.id}
-                className={activeParameterGroupId === group.id ? "tab-chip active" : "tab-chip"}
-                onClick={() => setActiveParameterGroupId(group.id)}
-                type="button"
-              >
-                {group.title}
-              </button>
-            ))}
-          </div>
-          {parameterDraft
-            .filter((group) => group.id === activeParameterGroupId)
-            .map((group) => (
-              <div className="editable-grid" key={group.id}>
-                <table className="editor-table parameter-editor-table">
-                  <thead>
-                    <tr>
-                      <th>符号</th>
-                      <th>参数名称</th>
-                      <th>单位</th>
-                      {PARAMETER_COLUMNS.map((column) => (
-                        <th key={column.key}>{column.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.rows.map((row, rowIndex) => (
-                      <tr key={row.name}>
-                        <td>{row.name}</td>
-                        <td>{row.label}</td>
-                        <td className="parameter-unit">{row.unit || "—"}</td>
-                        {PARAMETER_COLUMNS.map((column) => (
-                          <td key={column.key}>
-                            <input
-                              className="table-input"
-                              type="number"
-                              step="any"
-                              value={row[column.key]}
-                              onChange={(event) =>
-                                setParameterDraft((current) =>
-                                  current.map((item) =>
-                                    item.id !== group.id
-                                      ? item
-                                      : {
-                                          ...item,
-                                          rows: item.rows.map((entry, entryIndex) =>
-                                            entryIndex !== rowIndex
-                                              ? entry
-                                              : { ...entry, [column.key]: event.target.value },
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }
-                            />
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-        </Modal>
-      ) : null}
+      <ResultDialog
+        open={resultModalOpen}
+        tables={results}
+        activeKey={activeResultKey}
+        onActiveKeyChange={setActiveResultKey}
+        onClose={() => setResultModalOpen(false)}
+        onExport={handleExportResults}
+      />
 
-      {/* 浓度弹窗：批量维护工作区里每条记录的浓度。 */}
-      {concentrationModalOpen ? (
-        <Modal
-          title="污染物浓度设置"
-          subtitle="土壤浓度使用 mg/kg，地下水及地下水保护浓度使用 mg/L。"
-          size="xl"
-          onClose={() => setConcentrationModalOpen(false)}
-          actions={
-            <button className="primary-button" onClick={handleSaveConcentrations} type="button">
-              保存浓度
-            </button>
-          }
-        >
-          <div className="editable-grid">
-            <table className="editor-table">
-              <thead>
-                <tr>
-                  <th>序号</th>
-                  <th>污染物编号</th>
-                  <th>污染物名称</th>
-                  <th>污染物英文名</th>
-                  {CONCENTRATION_COLUMNS.map((column) => (
-                    <th key={column.key}>{`${column.label}（${column.unit}）`}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {concentrationDraft.map((item, index) => (
-                  <tr key={item.workspace_number}>
-                    <td>{item.workspace_number}</td>
-                    <td>{item.pollutant_id}</td>
-                    <td>{item.name}</td>
-                    <td>{item.english_name}</td>
-                    {CONCENTRATION_COLUMNS.map((column) => (
-                      <td key={column.key}>
-                        <input
-                          className="table-input"
-                          type="number"
-                          step="any"
-                          aria-label={`${column.label}，单位 ${column.unit}`}
-                          value={item[column.key]}
-                          onChange={(event) =>
-                            setConcentrationDraft((current) =>
-                              current.map((entry, entryIndex) =>
-                                entryIndex === index
-                                  ? { ...entry, [column.key]: event.target.value }
-                                  : entry,
-                              ),
-                            )
-                          }
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Modal>
-      ) : null}
+      <AdminLoginDialog
+        open={adminLoginOpen}
+        form={loginForm}
+        onFormChange={setLoginForm}
+        onClose={() => setAdminLoginOpen(false)}
+        onLogin={handleAdminLogin}
+      />
 
-      {/* 结果弹窗：把后端结果表格式化后展示为桌面表格。 */}
-      {resultModalOpen ? (
-        <Modal
-          title="计算结果"
-          subtitle="各结果表沿用原有运行逻辑，当前展示的是格式化后的桌面视图。"
-          size="xl"
-          onClose={() => setResultModalOpen(false)}
-          actions={
-            <>
-              <button className="ghost-button" onClick={handleExportResults} type="button">
-                导出 Excel
-              </button>
-              <button className="primary-button" onClick={() => setResultModalOpen(false)} type="button">
-                完成
-              </button>
-            </>
-          }
-        >
-          <div className="tab-strip">
-            {results.map((table) => (
-              <button
-                key={table.key}
-                className={activeResultKey === table.key ? "tab-chip active" : "tab-chip"}
-                onClick={() => setActiveResultKey(table.key)}
-                type="button"
-              >
-                {table.title}
-              </button>
-            ))}
-          </div>
-          {activeResult ? (
-            <DataTable
-              // 每张结果表的列结构不同。key 变化时重新建立表格，
-              // 避免 React 在标签切换时复用上一张表的表头节点。
-              key={activeResult.key}
-              headers={activeResult.headers}
-              rows={activeResult.rows.map((row, index) => ({
-                key: `${activeResult.key}-${index}`,
-                cells: row,
-              }))}
-              emptyText="还没有结果数据"
-            />
-          ) : null}
-        </Modal>
-      ) : null}
-
-      {/* 管理员登录弹窗：进入污染物库维护前的身份校验。 */}
-      {adminLoginOpen ? (
-        <Modal
-          title="管理员登录"
-          subtitle="通过原有用户表校验后才进入污染物库维护。"
-          size="sm"
-          onClose={() => setAdminLoginOpen(false)}
-          actions={
-            <button className="primary-button" onClick={handleAdminLogin} type="button">
-              登录
-            </button>
-          }
-        >
-          <div className="form-grid single">
-            <label>
-              <span>用户名</span>
-              <input
-                className="text-input"
-                value={loginForm.username}
-                onChange={(event) =>
-                  setLoginForm((current) => ({ ...current, username: event.target.value }))
-                }
-              />
-            </label>
-            <label>
-              <span>密码</span>
-              <input
-                className="text-input"
-                type="password"
-                value={loginForm.password}
-                onChange={(event) =>
-                  setLoginForm((current) => ({ ...current, password: event.target.value }))
-                }
-              />
-            </label>
-          </div>
-        </Modal>
-      ) : null}
-
-      {/* 管理员面板：查询、增删改污染物，并可修改密码。 */}
-      {adminPanelOpen ? (
-        <Modal
-          title="污染物数据库管理"
-          subtitle={`当前管理员：${adminUser || "未登录"}`}
-          size="xl"
-          onClose={() => setAdminPanelOpen(false)}
-          actions={
-            <>
-              <button
-                className="ghost-button"
-                onClick={() => {
-                  setSelectedAdminId(null);
-                  setAdminForm(emptyPollutantForm());
-                }}
-                type="button"
-              >
-                清空表单
-              </button>
-              <button className="ghost-button" onClick={() => handleAdminSave("create")} type="button">
-                新增
-              </button>
-              <button className="ghost-button" onClick={() => handleAdminSave("update")} type="button">
-                更新
-              </button>
-              <button className="ghost-button danger" onClick={handleAdminDelete} type="button">
-                删除
-              </button>
-            </>
-          }
-        >
-          <div className="admin-layout">
-            <section className="panel-subcard">
-              <div className="toolbar">
-                <input
-                  className="text-input"
-                  placeholder="按污染物名称或英文名搜索"
-                  value={adminKeyword}
-                  onChange={(event) => setAdminKeyword(event.target.value)}
-                />
-                <button className="secondary-button" onClick={() => refreshAdminCatalog(adminKeyword)} type="button">
-                  查询
-                </button>
-              </div>
-              <DataTable
-                headers={CATALOG_HEADERS}
-                rows={adminRows}
-                selectedKey={selectedAdminId}
-                onSelect={setSelectedAdminId}
-                emptyText="没有匹配的污染物"
-              />
-            </section>
-            <section className="panel-subcard">
-              <div className="form-grid">
-                {POLLUTANT_FORM_FIELDS.map((field) => (
-                  <label key={field.key}>
-                    <span>{field.label}</span>
-                    <input
-                      className="text-input"
-                      type={field.key === "name" || field.key === "english_name" ? "text" : "number"}
-                      step="any"
-                      value={adminForm[field.key]}
-                      onChange={(event) =>
-                        setAdminForm((current) => ({ ...current, [field.key]: event.target.value }))
-                      }
-                    />
-                  </label>
-                ))}
-              </div>
-              <div className="password-card">
-                <h3>修改密码</h3>
-                <div className="form-grid single">
-                  <label>
-                    <span>原密码</span>
-                    <input
-                      className="text-input"
-                      type="password"
-                      value={passwordForm.old_password}
-                      onChange={(event) =>
-                        setPasswordForm((current) => ({ ...current, old_password: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    <span>新密码</span>
-                    <input
-                      className="text-input"
-                      type="password"
-                      value={passwordForm.new_password}
-                      onChange={(event) =>
-                        setPasswordForm((current) => ({ ...current, new_password: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    <span>确认新密码</span>
-                    <input
-                      className="text-input"
-                      type="password"
-                      value={passwordForm.confirm_password}
-                      onChange={(event) =>
-                        setPasswordForm((current) => ({
-                          ...current,
-                          confirm_password: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-                <button className="primary-button" onClick={handlePasswordUpdate} type="button">
-                  保存新密码
-                </button>
-              </div>
-            </section>
-          </div>
-        </Modal>
-      ) : null}
+      <AdminPanelDialog
+        open={adminPanelOpen}
+        username={adminUser}
+        keyword={adminKeyword}
+        rows={adminRows(adminItems)}
+        selectedId={selectedAdminId}
+        pollutantForm={adminForm}
+        passwordForm={passwordForm}
+        onKeywordChange={setAdminKeyword}
+        onSelectedIdChange={setSelectedAdminId}
+        onPollutantFormChange={setAdminForm}
+        onPasswordFormChange={setPasswordForm}
+        onClear={() => {
+          setSelectedAdminId(null);
+          setAdminForm(createEmptyPollutantForm());
+        }}
+        onSearch={() => refreshAdminCatalog(adminKeyword)}
+        onCreate={() => handleAdminSave("create")}
+        onUpdate={() => handleAdminSave("update")}
+        onDelete={handleAdminDelete}
+        onPasswordUpdate={handlePasswordUpdate}
+        onClose={() => setAdminPanelOpen(false)}
+      />
     </div>
   );
 }

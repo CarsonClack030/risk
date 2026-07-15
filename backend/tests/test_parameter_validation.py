@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from risk_backend.repositories.parameters import PARAMETER_NAMES
 from risk_backend.models.entities import SiteSelection
+from risk_backend.repositories.parameters import PARAMETER_NAMES
 from risk_backend.services.calculator import RiskCalculator
 
 
@@ -34,7 +34,9 @@ def valid_parameter_values() -> dict[str, Decimal]:
 
 
 class ParameterValidationTests(unittest.TestCase):
-    def validate(self, values: dict[str, Decimal], standard: str = "G", area_type: str = "I") -> None:
+    def validate(
+        self, values: dict[str, Decimal], standard: str = "G", area_type: str = "I"
+    ) -> None:
         calculator = RiskCalculator(FakeParameterRepository(values))
         calculator.validate_parameters(SiteSelection(standard, area_type), values)
 

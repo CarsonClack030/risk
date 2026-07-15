@@ -12,8 +12,10 @@ def _sheet_xml(rows: list[list[str]]) -> str:
         for column_index, value in enumerate(row, start=1):
             cell_ref = f"{_column_name(column_index)}{row_index}"
             escaped = escape("" if value is None else str(value))
-            cells.append(f'<c r="{cell_ref}" t="inlineStr"><is><t>{escaped}</t></is></c>')
-        body.append(f"<row r=\"{row_index}\">{''.join(cells)}</row>")
+            cells.append(
+                f'<c r="{cell_ref}" t="inlineStr"><is><t>{escaped}</t></is></c>'
+            )
+        body.append(f'<row r="{row_index}">{"".join(cells)}</row>')
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'

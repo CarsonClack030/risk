@@ -3,7 +3,6 @@ from __future__ import annotations
 from risk_backend.models.entities import ParameterRow, SiteSelection, to_decimal
 from risk_backend.repositories.database import connect
 
-
 # 参数被分成 4 个逻辑分组，对应前端参数弹窗的 4 个标签页。
 PARAMETER_GROUPS = {
     1: "污染区参数",
@@ -14,13 +13,74 @@ PARAMETER_GROUPS = {
 
 
 PARAMETER_NAMES = [
-    "A", "Ab", "ABSo", "ACR", "AHQ", "ATca", "ATnc", "BWa", "BWc", "d", "DAIRa", "DAIRc",
-    "Delta_air", "Delta_gw", "dP", "dsub", "EDa", "EDc", "EFa", "EFc", "EFIa", "EFIc",
-    "EFOa", "EFOc", "Eit", "ER", "Ev", "fom", "fspi", "fspo", "GWCRa", "GWCRc", "Ha", "Hc",
-    "hcap", "hv", "I", "K_v", "LB", "Lcrack", "Lgw", "LS", "OSIRa", "OSIRc", "PIAF", "PM10",
-    "Pws", "Rho_b", "Rho_s", "SAEa", "SAEc", "SERa", "SERc", "SSARa", "SSARc", "Tau",
-    "Theta_acap", "Theta_acrack", "Theta_wcap", "Theta_wcrack", "Uair", "Ugw", "W", "WAF",
-    "X_crack", "Z_crack", "tc", "ta",
+    "A",
+    "Ab",
+    "ABSo",
+    "ACR",
+    "AHQ",
+    "ATca",
+    "ATnc",
+    "BWa",
+    "BWc",
+    "d",
+    "DAIRa",
+    "DAIRc",
+    "Delta_air",
+    "Delta_gw",
+    "dP",
+    "dsub",
+    "EDa",
+    "EDc",
+    "EFa",
+    "EFc",
+    "EFIa",
+    "EFIc",
+    "EFOa",
+    "EFOc",
+    "Eit",
+    "ER",
+    "Ev",
+    "fom",
+    "fspi",
+    "fspo",
+    "GWCRa",
+    "GWCRc",
+    "Ha",
+    "Hc",
+    "hcap",
+    "hv",
+    "I",
+    "K_v",
+    "LB",
+    "Lcrack",
+    "Lgw",
+    "LS",
+    "OSIRa",
+    "OSIRc",
+    "PIAF",
+    "PM10",
+    "Pws",
+    "Rho_b",
+    "Rho_s",
+    "SAEa",
+    "SAEc",
+    "SERa",
+    "SERc",
+    "SSARa",
+    "SSARc",
+    "Tau",
+    "Theta_acap",
+    "Theta_acrack",
+    "Theta_wcap",
+    "Theta_wcrack",
+    "Uair",
+    "Ugw",
+    "W",
+    "WAF",
+    "X_crack",
+    "Z_crack",
+    "tc",
+    "ta",
 ]
 
 
@@ -137,7 +197,9 @@ class ParameterRepository:
         """把临时参数表恢复为系统默认参数。"""
         with connect() as con:
             con.execute("delete from db_pol_area_par_temp")
-            con.execute("insert into db_pol_area_par_temp select * from db_pol_area_par")
+            con.execute(
+                "insert into db_pol_area_par_temp select * from db_pol_area_par"
+            )
 
     def save_group_rows(self, rows: list[ParameterRow]) -> None:
         """保存参数弹窗中的某一组草稿。"""

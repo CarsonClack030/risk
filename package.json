@@ -1,7 +1,7 @@
 {
   "name": "risk-studio",
   "private": true,
-  "version": "1.1.5",
+  "version": "1.1.6",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
@@ -16,6 +16,11 @@
     "build:release:windows": "tauri build -b nsis",
     "build:release:windows:msi": "tauri build -b msi",
     "build:release:full": "./build_release.sh",
+    "lint": "npm run lint:frontend && npm run lint:python",
+    "lint:frontend": "eslint src vite.config.js",
+    "lint:python": "python3 -m ruff check backend/src backend/tests backend/*.py scripts/*.py",
+    "format:frontend": "prettier --write \"src/**/*.{js,jsx,css}\" vite.config.js eslint.config.js",
+    "format:python": "python3 -m ruff format backend/src backend/tests backend/*.py scripts/*.py",
     "test:frontend": "node --test src/*.test.js",
     "test:macos-bundle": "bash scripts/smoke_macos_bundle.sh",
     "preview": "vite preview",
@@ -31,7 +36,11 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
-    "@vitejs/plugin-react": "^4.3.3",
-    "vite": "^5.4.8"
+    "@vitejs/plugin-react": "^5.2.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "prettier": "^3.8.2",
+    "vite": "^7.3.6"
   }
 }

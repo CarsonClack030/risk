@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "./runtime";
 
 // 这是前端和后端通信的“唯一入口”。
 // 我们把 fetch、错误处理、URL 拼接都收口到这里，
@@ -10,12 +11,6 @@ import { invoke } from "@tauri-apps/api/core";
 const FALLBACK_API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:38911";
 let resolvedApiBase = null;
 let resolvingApiBasePromise = null;
-
-// 只有在 Tauri 桌面壳里，window 上才会注入内部运行时对象。
-// 这个判断用于区分“浏览器调试环境”和“桌面应用环境”。
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
 
 // API 基地址解析的顺序很重要：
 // 1. 先尊重显式配置的 VITE_API_BASE，方便开发时手工指定后端。
@@ -73,12 +68,14 @@ async function resolveApiBase({ force = false } = {}) {
 // - 自动把后端错误转换为前端可读的 Error
 // - 自动区分 JSON 响应和二进制响应（例如 Excel 导出）
 async function performRequest(apiBase, path, options = {}) {
+  const { headers: providedHeaders, ...requestOptions } = options;
+  const headers = new Headers(providedHeaders);
+  if (typeof requestOptions.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(`${apiBase}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
+    ...requestOptions,
+    headers,
   });
 
   if (!response.ok) {
@@ -133,7 +130,6 @@ function qs(params = {}) {
 // 而不是把 fetch 细节暴露给页面组件。
 // 例如页面只需要知道“列出工作区”“计算结果”，不需要关心 HTTP 方法和路径。
 export const api = {
-  resolveBaseUrl: resolveApiBase,
   health: () => request("/api/health"),
   listCatalog: (keyword = "") => request(`/api/catalog${qs({ keyword })}`),
   listWorkspace: () => request("/api/workspace"),
@@ -178,7 +174,6 @@ export const api = {
     request("/api/results/export", {
       method: "POST",
       body: "{}",
-      headers: {},
     }),
   login: (username, password) =>
     request("/api/auth/login", {

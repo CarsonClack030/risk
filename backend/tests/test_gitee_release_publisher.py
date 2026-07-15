@@ -27,7 +27,9 @@ class GiteeReleasePublisherTests(unittest.TestCase):
 
         request = mock_open.call_args.args[0]
         self.assertEqual(request.get_method(), "POST")
-        self.assertIn("/remote_mirror/pull?access_token=private-token", request.full_url)
+        self.assertIn(
+            "/remote_mirror/pull?access_token=private-token", request.full_url
+        )
         self.assertNotIn("Authorization", request.headers)
 
     def test_release_assets_only_returns_required_installers(self) -> None:

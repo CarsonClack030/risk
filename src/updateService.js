@@ -1,13 +1,12 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import packageMetadata from "../package.json" with { type: "json" };
-import { isTauriRuntime } from "./fileTransfers.js";
+import { isTauriRuntime } from "./runtime.js";
 import { compareVersions } from "./versioning.js";
 
 export const PACKAGE_VERSION = packageMetadata.version;
 const GITEE_REPOSITORY = "CarsonClack030/risk";
-const GITEE_RELEASES_API =
-  `https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases?page=1&per_page=20&direction=desc`;
+const GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases?page=1&per_page=20&direction=desc`;
 
 function canonicalReleaseUrl(tagName) {
   const encodedTag = encodeURIComponent(String(tagName || "").trim());

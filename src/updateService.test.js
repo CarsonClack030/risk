@@ -63,10 +63,7 @@ test("更新下载地址统一重建为当前仓库的可信地址", async () =>
     ]),
   );
 
-  assert.equal(
-    result.releaseUrl,
-    "https://gitee.com/CarsonClack030/risk/releases/tag/v0.2.0",
-  );
+  assert.equal(result.releaseUrl, "https://gitee.com/CarsonClack030/risk/releases/tag/v0.2.0");
 });
 
 test("检查更新时跳过 Gitee 预发布版本", async () => {
@@ -98,10 +95,7 @@ test("下载地址只信任当前 Gitee 仓库的版本页面", () => {
     isTrustedReleaseUrl("https://github.com/CarsonClack030/risk/releases/tag/v1.1.4"),
     false,
   );
-  assert.equal(
-    isTrustedReleaseUrl("https://gitee.com/attacker/risk/releases/tag/v1.1.4"),
-    false,
-  );
+  assert.equal(isTrustedReleaseUrl("https://gitee.com/attacker/risk/releases/tag/v1.1.4"), false);
   assert.equal(
     isTrustedReleaseUrl("https://gitee.com/CarsonClack030/risk/releases-evil/tag/v1.1.4"),
     false,

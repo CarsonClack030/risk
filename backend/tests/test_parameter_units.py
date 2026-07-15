@@ -4,10 +4,14 @@ import sqlite3
 import unittest
 from decimal import Decimal
 
-from risk_backend.api_server import serialize_parameter_group
 from risk_backend.models.entities import ParameterRow
 from risk_backend.repositories.database import TEMPLATE_DB
-from risk_backend.repositories.parameters import PARAMETER_GROUPS, PARAMETER_NAMES, PARAMETER_UNITS
+from risk_backend.repositories.parameters import (
+    PARAMETER_GROUPS,
+    PARAMETER_NAMES,
+    PARAMETER_UNITS,
+)
+from risk_backend.serialization import serialize_parameter_group
 
 
 class ParameterUnitTests(unittest.TestCase):
@@ -17,7 +21,9 @@ class ParameterUnitTests(unittest.TestCase):
         self.assertTrue(all(PARAMETER_UNITS.values()))
 
         with sqlite3.connect(TEMPLATE_DB) as connection:
-            database_names = {row[0] for row in connection.execute("select name from db_pol_area_par")}
+            database_names = {
+                row[0] for row in connection.execute("select name from db_pol_area_par")
+            }
         self.assertEqual(set(PARAMETER_UNITS), database_names)
 
     def test_representative_units_match_parameter_dimensions(self) -> None:

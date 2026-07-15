@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-
 # 统一的零值常量。
 # 因为项目里大量使用 Decimal，如果到处手写 Decimal("0") 会非常啰嗦，
 # 也不利于阅读公式。
@@ -38,6 +37,7 @@ class Pollutant:
     可以把它理解成 `db_pol` 表在 Python 里的对象版本。
     一个污染物对象只描述“这个污染物是什么”，不描述“本次场地里的浓度是多少”。
     """
+
     id: int
     name: str
     english_name: str
@@ -64,6 +64,7 @@ class PollutantConcentration:
     同一个污染物现在允许被加入多次，因此不能仅靠 pollutant_id 区分一条记录，
     需要靠工作区序号来唯一标识“本次计算里的这一行”。
     """
+
     workspace_number: int
     pollutant_id: int
     name: str
@@ -82,6 +83,7 @@ class SelectedPollutant:
     - pollutant：污染物本身的理化参数
     - concentration：本次场地评估里填写的浓度
     """
+
     workspace_number: int
     pollutant: Pollutant
     concentration: PollutantConcentration
@@ -94,6 +96,7 @@ class ParameterRow:
     unit 是只读展示元数据，四组标准值共享同一单位；保存参数时只更新数值，
     不会把单位写进运行数据库。
     """
+
     name: str
     label: str
     unit: str
@@ -107,6 +110,7 @@ class ParameterRow:
 @dataclass
 class SiteSelection:
     """用户在界面上选择的场地条件。"""
+
     standard: str
     area_type: str
 
@@ -116,13 +120,6 @@ class SiteSelection:
         # data_gi / data_gii / data_zi / data_zii
         # 所以这里直接拼接出当前应该读取哪一列。
         return f"data_{self.standard}{self.area_type}"
-
-
-@dataclass
-class User:
-    """管理员账号模型。"""
-    username: str
-    password: str
 
 
 class AttributeMap:
@@ -141,6 +138,3 @@ class AttributeMap:
             return self._values[item]
         except KeyError as exc:
             raise AttributeError(item) from exc
-
-    def as_dict(self) -> dict[str, Any]:
-        return dict(self._values)
