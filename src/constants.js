@@ -42,6 +42,15 @@ export const CATALOG_HEADERS = [
 // 主界面挑选污染物时只保留最核心的三列，避免用户被大量理化参数干扰。
 export const CATALOG_PICKER_HEADERS = ["编号", "污染物名称", "英文名"];
 
+// 四类浓度在界面中的名称、字段和单位统一从这里读取。
+// 土壤浓度按质量比使用 mg/kg，地下水及地下水保护目标浓度使用 mg/L。
+export const CONCENTRATION_COLUMNS = [
+  { key: "surface_concentration", label: "地表浓度", unit: "mg/kg" },
+  { key: "lower_soil_concentration", label: "下层土壤浓度", unit: "mg/kg" },
+  { key: "groundwater_concentration", label: "地下水浓度", unit: "mg/L" },
+  { key: "groundwater_protection_concentration", label: "地下水保护浓度", unit: "mg/L" },
+];
+
 // 工作区是“已经参与本次计算”的污染物列表。
 // 这里的列会同时服务于浓度编辑、工作区浏览以及结果定位。
 export const WORKSPACE_HEADERS = [
@@ -49,10 +58,7 @@ export const WORKSPACE_HEADERS = [
   "污染物编号",
   "污染物名称",
   "英文名",
-  "地表浓度",
-  "下层土壤浓度",
-  "地下水浓度",
-  "地下水保护浓度",
+  ...CONCENTRATION_COLUMNS.map((column) => `${column.label}（${column.unit}）`),
 ];
 
 // 管理员维护污染物时的表单字段定义。

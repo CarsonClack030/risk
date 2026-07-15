@@ -24,6 +24,86 @@ PARAMETER_NAMES = [
 ]
 
 
+# 参数单位属于模型定义，不属于用户可以修改的场地参数，因此不写入数据库。
+# 这份映射主要依据 HJ 25.3—2019 附录 G 的参数表；项目额外保留的
+# SAEa / SAEc 和 tc / ta 分别使用皮肤面积（cm²）和单次接触时间（h）。
+# 使用参数符号作为 key，可以让国家标准、浙江标准四组数值共享同一单位。
+PARAMETER_UNITS = {
+    # 污染区参数
+    "A": "cm²",
+    "d": "cm",
+    "dsub": "cm",
+    "Lgw": "cm",
+    "LS": "cm",
+    # 土壤参数
+    "Delta_air": "cm",
+    "Delta_gw": "cm",
+    "fom": "g·kg⁻¹",
+    "hcap": "cm",
+    "hv": "cm",
+    "I": "cm·a⁻¹",
+    "PM10": "mg·m⁻³",
+    "Pws": "kg·kg⁻¹",
+    "Rho_b": "kg·dm⁻³",
+    "Rho_s": "kg·dm⁻³",
+    "Theta_acap": "无量纲",
+    "Theta_wcap": "无量纲",
+    "Uair": "cm·s⁻¹",
+    "Ugw": "cm·a⁻¹",
+    "W": "cm",
+    # 建筑物参数
+    "Ab": "cm²",
+    "dP": "g·cm⁻¹·s⁻²",
+    "Eit": "无量纲",
+    "ER": "次·d⁻¹",
+    "K_v": "cm²",
+    "LB": "cm",
+    "Lcrack": "cm",
+    "Tau": "a",
+    "Theta_acrack": "无量纲",
+    "Theta_wcrack": "无量纲",
+    "X_crack": "cm",
+    "Z_crack": "cm",
+    # 暴露参数
+    "ABSo": "无量纲",
+    "ACR": "无量纲",
+    "AHQ": "无量纲",
+    "ATca": "d",
+    "ATnc": "d",
+    "BWa": "kg",
+    "BWc": "kg",
+    "DAIRa": "m³·d⁻¹",
+    "DAIRc": "m³·d⁻¹",
+    "EDa": "a",
+    "EDc": "a",
+    "EFa": "d·a⁻¹",
+    "EFc": "d·a⁻¹",
+    "EFIa": "d·a⁻¹",
+    "EFIc": "d·a⁻¹",
+    "EFOa": "d·a⁻¹",
+    "EFOc": "d·a⁻¹",
+    "Ev": "次·d⁻¹",
+    "fspi": "无量纲",
+    "fspo": "无量纲",
+    "GWCRa": "L·d⁻¹",
+    "GWCRc": "L·d⁻¹",
+    "Ha": "cm",
+    "Hc": "cm",
+    "OSIRa": "mg·d⁻¹",
+    "OSIRc": "mg·d⁻¹",
+    "PIAF": "无量纲",
+    "SAEa": "cm²",
+    "SAEc": "cm²",
+    "SERa": "无量纲",
+    "SERc": "无量纲",
+    "SSARa": "mg·cm⁻²",
+    "SSARc": "mg·cm⁻²",
+    "WAF": "无量纲",
+    "tc": "h",
+    "ta": "h",
+}
+
+
 class ParameterRepository:
     """参数仓储层。"""
 
@@ -43,6 +123,7 @@ class ParameterRepository:
             ParameterRow(
                 name=row["name"],
                 label=row["name_ch"] or row["name"],
+                unit=PARAMETER_UNITS[row["name"]],
                 data_gi=to_decimal(row["data_GI"]),
                 data_gii=to_decimal(row["data_GII"]),
                 data_zi=to_decimal(row["data_ZI"]),

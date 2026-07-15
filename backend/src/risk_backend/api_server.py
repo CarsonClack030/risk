@@ -22,7 +22,11 @@ from risk_backend.models.entities import (
 from risk_backend.repositories.auth import AuthRepository
 from risk_backend.repositories.catalog import CatalogRepository
 from risk_backend.repositories.database import RUNTIME_DB, ensure_database
-from risk_backend.repositories.parameters import PARAMETER_GROUPS, ParameterRepository
+from risk_backend.repositories.parameters import (
+    PARAMETER_GROUPS,
+    PARAMETER_UNITS,
+    ParameterRepository,
+)
 from risk_backend.repositories.results import ResultRepository
 from risk_backend.repositories.workspace import WorkspaceRepository
 from risk_backend.services.calculator import RiskCalculator
@@ -201,12 +205,21 @@ EXCEL_COLUMN_ALIASES = {
     "pollutant_id": ("编号", "污染物编号", "污染物id", "id", "number", "pollutant_id"),
     "name": ("污染物名称", "名称", "name", "p_name"),
     "english_name": ("英文名", "英文名称", "english_name", "e_name"),
-    "surface_concentration": ("地表浓度", "表层土壤浓度", "surface_concentration"),
-    "lower_soil_concentration": ("下层土壤浓度", "lower_soil_concentration"),
-    "groundwater_concentration": ("地下水浓度", "groundwater_concentration"),
+    "surface_concentration": (
+        "地表浓度", "地表浓度（mg/kg）", "表层土壤浓度", "表层土壤浓度（mg/kg）",
+        "surface_concentration",
+    ),
+    "lower_soil_concentration": (
+        "下层土壤浓度", "下层土壤浓度（mg/kg）", "lower_soil_concentration",
+    ),
+    "groundwater_concentration": (
+        "地下水浓度", "地下水浓度（mg/L）", "groundwater_concentration",
+    ),
     "groundwater_protection_concentration": (
         "地下水保护浓度",
+        "地下水保护浓度（mg/L）",
         "保护地下水浓度",
+        "保护地下水浓度（mg/L）",
         "groundwater_protection_concentration",
     ),
 }
@@ -222,14 +235,15 @@ WORKSPACE_IMPORT_TEMPLATE_HEADERS = (
     "污染物编号",
     "污染物名称",
     "英文名",
-    "地表浓度",
-    "下层土壤浓度",
-    "地下水浓度",
-    "地下水保护浓度",
+    "地表浓度（mg/kg）",
+    "下层土壤浓度（mg/kg）",
+    "地下水浓度（mg/L）",
+    "地下水保护浓度（mg/L）",
 )
 WORKSPACE_IMPORT_TEMPLATE_NOTICE = (
     "使用说明：支持上传 .xlsx / .xls / .csv / .txt；至少填写“污染物编号 / 污染物名称 / 英文名”其中之一；"
-    "四类浓度留空按 0 处理；模板示例行可保留，导入时会自动忽略。"
+    "土壤浓度单位为 mg/kg，地下水浓度单位为 mg/L；四类浓度留空按 0 处理；"
+    "模板示例行可保留，导入时会自动忽略。"
 )
 WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_MARKER = "模板示例（保留也会自动忽略）"
 WORKSPACE_IMPORT_TEMPLATE_EXAMPLE_ROW = (
@@ -312,6 +326,7 @@ def serialize_parameter_group(group_id: int, rows: list[ParameterRow]) -> dict[s
             {
                 "name": row.name,
                 "label": row.label,
+                "unit": row.unit,
                 "data_gi": _json_value(row.data_gi),
                 "data_gii": _json_value(row.data_gii),
                 "data_zi": _json_value(row.data_zi),
@@ -618,6 +633,8 @@ class RiskBackend:
                     ParameterRow(
                         name=name,
                         label=label,
+                        # 单位由后端按参数符号恢复，不信任前端传回的展示文本。
+                        unit=PARAMETER_UNITS[name],
                         data_gi=self._parse_parameter_decimal(row.get("data_gi"), label, "国家标准·第一类用地"),
                         data_gii=self._parse_parameter_decimal(row.get("data_gii"), label, "国家标准·第二类用地"),
                         data_zi=self._parse_parameter_decimal(row.get("data_zi"), label, "浙江标准·第一类用地"),

@@ -89,9 +89,14 @@ class SelectedPollutant:
 
 @dataclass
 class ParameterRow:
-    """参数表中的一行。"""
+    """参数表中的一行。
+
+    unit 是只读展示元数据，四组标准值共享同一单位；保存参数时只更新数值，
+    不会把单位写进运行数据库。
+    """
     name: str
     label: str
+    unit: str
     data_gi: Decimal
     data_gii: Decimal
     data_zi: Decimal

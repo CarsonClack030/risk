@@ -4,6 +4,7 @@ import { Modal, MetricCard, DataTable } from "./components";
 import {
   CATALOG_HEADERS,
   CATALOG_PICKER_HEADERS,
+  CONCENTRATION_COLUMNS,
   PARAMETER_COLUMNS,
   PATHWAYS,
   POLLUTANT_FORM_FIELDS,
@@ -1267,7 +1268,8 @@ function App() {
           />
           <p className="panel-note">
             支持导入 <strong>.xlsx / .xls / .csv / .txt</strong>；至少填写“编号 / 污染物名称 / 英文名”
-            其中之一，浓度列留空按 0 处理；模板示例行即使保留，导入时也会自动忽略。
+            其中之一；土壤浓度单位为 <strong>mg/kg</strong>，地下水浓度单位为 <strong>mg/L</strong>；
+            浓度列留空按 0 处理，模板示例行即使保留也会自动忽略。
           </p>
           <div className="panel-footer">
             <button className="ghost-button" onClick={handleDownloadImportTemplate} type="button">
@@ -1398,11 +1400,12 @@ function App() {
             .filter((group) => group.id === activeParameterGroupId)
             .map((group) => (
               <div className="editable-grid" key={group.id}>
-                <table className="editor-table">
+                <table className="editor-table parameter-editor-table">
                   <thead>
                     <tr>
                       <th>符号</th>
                       <th>参数名称</th>
+                      <th>单位</th>
                       {PARAMETER_COLUMNS.map((column) => (
                         <th key={column.key}>{column.label}</th>
                       ))}
@@ -1413,6 +1416,7 @@ function App() {
                       <tr key={row.name}>
                         <td>{row.name}</td>
                         <td>{row.label}</td>
+                        <td className="parameter-unit">{row.unit || "—"}</td>
                         {PARAMETER_COLUMNS.map((column) => (
                           <td key={column.key}>
                             <input
@@ -1452,7 +1456,7 @@ function App() {
       {concentrationModalOpen ? (
         <Modal
           title="污染物浓度设置"
-          subtitle="地表、下层土壤、地下水和地下水保护浓度统一在这里维护。"
+          subtitle="土壤浓度使用 mg/kg，地下水及地下水保护浓度使用 mg/L。"
           size="xl"
           onClose={() => setConcentrationModalOpen(false)}
           actions={
@@ -1469,10 +1473,9 @@ function App() {
                   <th>污染物编号</th>
                   <th>污染物名称</th>
                   <th>污染物英文名</th>
-                  <th>地表浓度</th>
-                  <th>下层土壤浓度</th>
-                  <th>地下水浓度</th>
-                  <th>地下水保护浓度</th>
+                  {CONCENTRATION_COLUMNS.map((column) => (
+                    <th key={column.key}>{`${column.label}（${column.unit}）`}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -1482,22 +1485,20 @@ function App() {
                     <td>{item.pollutant_id}</td>
                     <td>{item.name}</td>
                     <td>{item.english_name}</td>
-                    {[
-                      "surface_concentration",
-                      "lower_soil_concentration",
-                      "groundwater_concentration",
-                      "groundwater_protection_concentration",
-                    ].map((field) => (
-                      <td key={field}>
+                    {CONCENTRATION_COLUMNS.map((column) => (
+                      <td key={column.key}>
                         <input
                           className="table-input"
                           type="number"
                           step="any"
-                          value={item[field]}
+                          aria-label={`${column.label}，单位 ${column.unit}`}
+                          value={item[column.key]}
                           onChange={(event) =>
                             setConcentrationDraft((current) =>
                               current.map((entry, entryIndex) =>
-                                entryIndex === index ? { ...entry, [field]: event.target.value } : entry,
+                                entryIndex === index
+                                  ? { ...entry, [column.key]: event.target.value }
+                                  : entry,
                               ),
                             )
                           }
