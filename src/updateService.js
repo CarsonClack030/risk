@@ -5,21 +5,16 @@ import { isTauriRuntime } from "./fileTransfers.js";
 import { compareVersions } from "./versioning.js";
 
 export const PACKAGE_VERSION = packageMetadata.version;
-const GITHUB_REPOSITORY = "CarsonClack030/risk";
-const GITHUB_LATEST_RELEASE_API =
-  `https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest`;
-const TRUSTED_REPOSITORIES = new Set([
-  GITHUB_REPOSITORY.toLowerCase(),
-  "wangminglei030/risk",
-]);
+const GITEE_REPOSITORY = "CarsonClack030/risk";
+const GITEE_RELEASES_API =
+  `https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases?page=1&per_page=20&direction=desc`;
 
 function canonicalReleaseUrl(tagName) {
   const encodedTag = encodeURIComponent(String(tagName || "").trim());
-  return `https://github.com/${GITHUB_REPOSITORY}/releases/tag/${encodedTag}`;
+  return `https://gitee.com/${GITEE_REPOSITORY}/releases/tag/${encodedTag}`;
 }
 
-// GitHub 用户名大小写不敏感，并且仓库迁移后旧用户名仍可能出现在缓存链接中。
-// 这里按路径段精确判断仓库和 releases，避免简单 startsWith 放过伪造前缀。
+// 按主机名和每个路径段精确判断下载页，避免 startsWith 放过相似域名或伪造前缀。
 export function isTrustedReleaseUrl(releaseUrl) {
   try {
     const url = new URL(releaseUrl);
@@ -27,9 +22,12 @@ export function isTrustedReleaseUrl(releaseUrl) {
     const repository = `${segments[0] || ""}/${segments[1] || ""}`.toLowerCase();
     return (
       url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "github.com" &&
-      TRUSTED_REPOSITORIES.has(repository) &&
-      segments[2]?.toLowerCase() === "releases"
+      url.hostname.toLowerCase() === "gitee.com" &&
+      repository === GITEE_REPOSITORY.toLowerCase() &&
+      segments[2]?.toLowerCase() === "releases" &&
+      segments[3]?.toLowerCase() === "tag" &&
+      Boolean(segments[4]) &&
+      segments.length === 5
     );
   } catch {
     return false;
@@ -49,18 +47,18 @@ export async function getCurrentAppVersion() {
   }
 }
 
-// GitHub 的 latest Release 接口只返回正式发布版本，不会把草稿和预发布版
-// 错当成普通用户应该安装的稳定更新。
+// Gitee 的 Release 列表可能同时包含正式版和预发布版，因此客户端主动选择
+// 第一条正式版本，避免测试版本被普通用户误装。
 export async function checkForUpdates(currentVersion, request = fetch) {
   let response;
   try {
-    response = await request(GITHUB_LATEST_RELEASE_API, {
+    response = await request(GITEE_RELEASES_API, {
       headers: {
-        Accept: "application/vnd.github+json",
+        Accept: "application/json",
       },
     });
   } catch {
-    throw new Error("无法连接 GitHub，请检查网络后重试。");
+    throw new Error("无法连接 Gitee，请检查网络后重试。");
   }
 
   if (response.status === 404) {
@@ -70,13 +68,22 @@ export async function checkForUpdates(currentVersion, request = fetch) {
     };
   }
   if (response.status === 403) {
-    throw new Error("GitHub 暂时拒绝了更新查询，请稍后再试。");
+    throw new Error("Gitee 暂时拒绝了更新查询，请稍后再试。");
   }
   if (!response.ok) {
-    throw new Error(`检查更新失败，GitHub 返回状态码 ${response.status}。`);
+    throw new Error(`检查更新失败，Gitee 返回状态码 ${response.status}。`);
   }
 
-  const release = await response.json();
+  const releases = await response.json();
+  const release = Array.isArray(releases)
+    ? releases.find((item) => item && item.prerelease !== true)
+    : null;
+  if (!release) {
+    return {
+      status: "unavailable",
+      currentVersion,
+    };
+  }
   const latestVersion = String(release.tag_name || "").replace(/^v/i, "");
   const comparison = compareVersions(currentVersion, latestVersion);
   const common = {
@@ -84,9 +91,9 @@ export async function checkForUpdates(currentVersion, request = fetch) {
     latestVersion,
     releaseName: release.name || `v${latestVersion}`,
     releaseNotes: String(release.body || "").trim(),
-    // 下载页只由固定仓库地址和 GitHub 返回的 tag 组成，避免用户名迁移或大小写差异误报。
+    // 下载页只由固定 Gitee 仓库和 API 返回的 tag 组成，不信任响应中的任意外链。
     releaseUrl: canonicalReleaseUrl(release.tag_name),
-    publishedAt: release.published_at || "",
+    publishedAt: release.created_at || release.published_at || "",
   };
 
   if (comparison < 0) {
@@ -101,7 +108,7 @@ export async function checkForUpdates(currentVersion, request = fetch) {
 // 外部地址在调用 Tauri 插件前再校验一次，只允许打开本仓库的 Release 页面。
 export async function openReleasePage(releaseUrl) {
   if (!isTrustedReleaseUrl(releaseUrl)) {
-    throw new Error("更新下载地址不是受信任的 GitHub Release 页面。");
+    throw new Error("更新下载地址不是受信任的 Gitee Release 页面。");
   }
   const url = new URL(releaseUrl);
 

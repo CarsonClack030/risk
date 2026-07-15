@@ -200,7 +200,7 @@ function App() {
   const selectedAdminItem = adminItems.find((item) => item.id === selectedAdminId) || null;
   const allPathwaysSelected = PATHWAYS.every((item) => pathways[item.key]);
 
-  // 桌面运行时读取安装包中的真实版本，随后立即静默检查一次 GitHub Release。
+  // 桌面运行时读取安装包中的真实版本，随后立即静默检查一次 Gitee Release。
   // “静默”只表示网络失败或没有更新时不打断启动；发现新版本仍会正常弹窗询问。
   useEffect(() => {
     let cancelled = false;
@@ -387,11 +387,11 @@ function App() {
       } else if (!silent && update.status === "current") {
         flash("success", `当前已是最新版本 v${currentVersion}`);
       } else if (!silent && update.status === "ahead") {
-        flash("success", `当前版本 v${currentVersion} 高于 GitHub 已发布版本`);
+        flash("success", `当前版本 v${currentVersion} 高于 Gitee 已发布版本`);
       } else if (!silent) {
         flash(
           "success",
-          "GitHub 暂无可读取的正式 Release，请确认仓库已公开并完成版本发布。",
+          "Gitee 暂无可读取的正式 Release，请确认仓库已公开并完成版本发布。",
         );
       }
     } catch (loadError) {
@@ -416,7 +416,7 @@ function App() {
     try {
       await openReleasePage(availableUpdate.releaseUrl);
       setAvailableUpdate(null);
-      flash("success", "已打开 GitHub 下载页面");
+      flash("success", "已打开 Gitee 下载页面");
     } catch (loadError) {
       flash("error", loadError.message);
     }
@@ -1314,7 +1314,7 @@ function App() {
       {availableUpdate ? (
         <Modal
           title="发现新版本"
-          subtitle="是否前往 GitHub 下载新版本安装包？"
+          subtitle="是否前往 Gitee 下载新版本安装包？"
           size="sm"
           onClose={() => setAvailableUpdate(null)}
           actions={
@@ -1345,7 +1345,7 @@ function App() {
             ) : (
               <div className="update-notes muted">本次发布暂未填写更新说明。</div>
             )}
-            <small>确认后将使用系统默认浏览器打开 GitHub Release 页面。</small>
+            <small>确认后将使用系统默认浏览器打开 Gitee Release 页面。</small>
           </div>
         </Modal>
       ) : null}

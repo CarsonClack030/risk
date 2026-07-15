@@ -45,7 +45,7 @@ risk_tauri/
 │   ├── fileTransfers.js              # 系统文件选择、读取与另存为
 │   ├── main.jsx                      # React 入口
 │   ├── styles.css                    # 页面样式
-│   ├── updateService.js              # GitHub Release 更新检查与下载页打开
+│   ├── updateService.js              # Gitee Release 更新检查与下载页打开
 │   ├── versioning.js                 # 纯 JavaScript 版本比较规则
 │   └── versioning.test.js            # 版本比较单元测试
 ├── backend/
@@ -100,14 +100,15 @@ risk_tauri/
 - 在前端和后端之间传递真实 API 地址
 - 使用本次启动令牌关闭 Python 服务，避免 PyInstaller 子进程残留
 
-桌面壳还通过 `tauri-plugin-opener` 安全地打开 GitHub Release 页面。能力配置只允许
+桌面壳还通过 `tauri-plugin-opener` 安全地打开 Gitee Release 页面。能力配置只允许
 访问本项目的 Release 地址，不会给前端开放任意外部程序或任意网址。
 
-前端启动后会先通过 Tauri 读取安装包真实版本，再调用 `updateService.js` 查询 GitHub 最新
-正式 Release。发现更高版本时才弹出下载确认；没有更新、断网或接口暂不可用都不会阻塞
-本地后端和主界面。顶部“检查更新”按钮复用同一套逻辑，但手动检查会显示完整状态或错误。
+前端启动后会先通过 Tauri 读取安装包真实版本，再调用 `updateService.js` 查询 Gitee 最新
+正式 Release。查询时会主动跳过预发布版本；发现更高版本时才弹出下载确认，没有更新、断网
+或接口暂不可用都不会阻塞本地后端和主界面。顶部“检查更新”按钮复用同一套逻辑，但手动
+检查会显示完整状态或错误。
 下载地址不直接采用 API 返回的完整 URL，而是用固定仓库名和 Release tag 重新构造；校验时
-按路径段匹配并兼容 GitHub 用户名大小写及旧用户名，避免仓库迁移后误报“不受信任”。
+精确匹配 Gitee 主机名、仓库和版本页路径，避免外部接口返回内容被利用来打开任意网址。
 
 PyInstaller `onefile` 在运行时包含外层引导进程和真正执行 Python 的子进程。直接 kill 外层
 可能让子进程变成孤儿，所以 Tauri 会先向 `/api/shutdown` 发送本次启动生成的令牌。后端
