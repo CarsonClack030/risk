@@ -132,6 +132,7 @@ function App() {
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [adminUser, setAdminUser] = useState("");
+  const [adminToken, setAdminToken] = useState("");
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [adminKeyword, setAdminKeyword] = useState("");
   const [adminItems, setAdminItems] = useState([]);
@@ -370,7 +371,9 @@ function App() {
       setAvailableUpdate(null);
       flash("success", "已打开 Gitee 下载页面");
     } catch (loadError) {
-      flash("error", loadError.message);
+      if (requestId === catalogRequestIdRef.current) {
+        flash("error", loadError.message);
+      }
     }
   }
 
@@ -422,7 +425,9 @@ function App() {
         setSelectedCatalogId(null);
       }
     } catch (loadError) {
-      flash("error", loadError.message);
+      if (requestId === catalogRequestIdRef.current) {
+        flash("error", loadError.message);
+      }
     }
   }
 
@@ -477,7 +482,9 @@ function App() {
         setSelectedAdminId(null);
       }
     } catch (loadError) {
-      flash("error", loadError.message);
+      if (requestId === adminRequestIdRef.current) {
+        flash("error", loadError.message);
+      }
     }
   }
 
@@ -798,6 +805,7 @@ function App() {
         return;
       }
       setAdminUser(payload.username);
+      setAdminToken(payload.token);
       setAdminLoginOpen(false);
       setAdminPanelOpen(true);
       await refreshAdminCatalog("");
@@ -812,14 +820,18 @@ function App() {
   async function handleAdminSave(mode) {
     try {
       if (mode === "create") {
-        await api.addPollutant({ ...adminForm, keyword: adminKeyword });
+        await api.addPollutant({ ...adminForm, keyword: adminKeyword }, adminToken);
         flash("success", "污染物已新增");
       } else {
         if (!selectedAdminItem) {
           flash("error", "请先选择一条污染物记录");
           return;
         }
-        await api.updatePollutant(selectedAdminItem.id, { ...adminForm, keyword: adminKeyword });
+        await api.updatePollutant(
+          selectedAdminItem.id,
+          { ...adminForm, keyword: adminKeyword },
+          adminToken,
+        );
         flash("success", "污染物已更新");
       }
       setAdminForm(createEmptyPollutantForm());
@@ -840,7 +852,7 @@ function App() {
       return;
     }
     try {
-      await api.deletePollutant(selectedAdminItem.id, adminKeyword);
+      await api.deletePollutant(selectedAdminItem.id, adminKeyword, adminToken);
       setAdminForm(createEmptyPollutantForm());
       setSelectedAdminId(null);
       await Promise.all([refreshAdminCatalog(adminKeyword), refreshCatalog(catalogKeyword)]);
@@ -857,17 +869,35 @@ function App() {
       return;
     }
     try {
-      const payload = await api.updatePassword({
-        username: adminUser,
-        old_password: passwordForm.old_password,
-        new_password: passwordForm.new_password,
-      });
+      const payload = await api.updatePassword(
+        {
+          old_password: passwordForm.old_password,
+          new_password: passwordForm.new_password,
+        },
+        adminToken,
+      );
       if (payload.success) {
         setPasswordForm({ old_password: "", new_password: "", confirm_password: "" });
-        flash("success", "密码修改成功");
+        setAdminToken("");
+        setAdminPanelOpen(false);
+        flash("success", "密码修改成功，请使用新密码重新登录");
       }
     } catch (loadError) {
       flash("error", loadError.message);
+    }
+  }
+
+  async function handleAdminClose() {
+    adminRequestIdRef.current += 1;
+    const token = adminToken;
+    setAdminPanelOpen(false);
+    setAdminToken("");
+    if (token) {
+      try {
+        await api.logout(token);
+      } catch {
+        // 关闭面板不应被网络或已过期会话阻塞。
+      }
     }
   }
 
@@ -1046,7 +1076,7 @@ function App() {
         onUpdate={() => handleAdminSave("update")}
         onDelete={handleAdminDelete}
         onPasswordUpdate={handlePasswordUpdate}
-        onClose={() => setAdminPanelOpen(false)}
+        onClose={handleAdminClose}
       />
     </div>
   );

@@ -14,6 +14,7 @@ class ShutdownEndpointTests(unittest.TestCase):
 
     def setUp(self) -> None:
         RequestHandler.shutdown_token = "test-shutdown-token"
+        RequestHandler.api_token = ""
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
         self.thread = threading.Thread(
             target=self.server.serve_forever,

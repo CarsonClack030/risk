@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from risk_backend.models.entities import (
     ZERO,
@@ -108,8 +108,10 @@ class RiskCalculator:
         返回值第一层 key 是 workspace_number，
         这样即使同一个污染物被加入多次，也能分别保存结果。
         """
+        self.validate_selection(selection)
         parameter_values = self.parameter_repository.get_parameter_map(selection)
         self.validate_parameters(selection, parameter_values)
+        self.validate_selected_pollutants(selected_pollutants)
         parameters = AttributeMap(parameter_values)
         return {
             item.workspace_number: self._calculate_single(
@@ -117,6 +119,54 @@ class RiskCalculator:
             )
             for item in selected_pollutants
         }
+
+    @staticmethod
+    def validate_selection(selection: SiteSelection) -> None:
+        """校验场地选项，防止未经验证的值进入 SQL 列名拼接。"""
+        if selection.standard not in {"G", "Z"}:
+            raise ValueError("适用标准只能选择国家标准或浙江标准")
+        if selection.area_type not in {"I", "II"}:
+            raise ValueError("用地类型只能选择第一类用地或第二类用地")
+
+    @staticmethod
+    def validate_selected_pollutants(
+        selected_pollutants: list[SelectedPollutant],
+    ) -> None:
+        """校验工作区中的理化参数和浓度，避免负数进入根式和分母。"""
+        pollutant_fields = (
+            "henry",
+            "da",
+            "dw",
+            "koc",
+            "solubility",
+            "sfo",
+            "iur",
+            "rfdo",
+            "rfc",
+            "absgi",
+            "absd",
+            "saf",
+            "kp",
+        )
+        concentration_fields = (
+            ("surface_concentration", "地表浓度"),
+            ("lower_soil_concentration", "下层土壤浓度"),
+            ("groundwater_concentration", "地下水浓度"),
+            ("groundwater_protection_concentration", "地下水保护浓度"),
+        )
+        for item in selected_pollutants:
+            for field in pollutant_fields:
+                value = getattr(item.pollutant, field)
+                if not value.is_finite() or value < ZERO:
+                    raise ValueError(
+                        f"污染物“{item.pollutant.name}”的参数 {field} 必须是非负有限数字"
+                    )
+            for field, label in concentration_fields:
+                value = getattr(item.concentration, field)
+                if not value.is_finite() or value < ZERO:
+                    raise ValueError(
+                        f"工作区序号 {item.workspace_number} 的{label}必须是非负有限数字"
+                    )
 
     def validate_parameters(
         self, selection: SiteSelection, values: dict[str, Decimal]
@@ -127,6 +177,7 @@ class RiskCalculator:
         过大时，`总孔隙率 - 充水孔隙率` 会成为负数，随后进行 3.33 次方就会触发
         `Decimal.InvalidOperation`。这里把底层数学异常提前翻译成可操作的中文提示。
         """
+        self.validate_selection(selection)
         errors: list[str] = []
         finite_values: dict[str, Decimal] = {}
 
@@ -209,10 +260,10 @@ class RiskCalculator:
                 * finite_values["X_crack"]
                 / (finite_values["Ab"] * finite_values["Eit"])
             )
-            if log_argument == 1:
+            if log_argument <= 1:
                 errors.append(
-                    "建筑物参数使气体入侵公式的对数分母为 0："
-                    "2×Z_crack×X_crack 不能等于 Ab×Eit"
+                    "建筑物参数使气体入侵公式的对数无效："
+                    "2×Z_crack×X_crack 必须大于 Ab×Eit"
                 )
 
         if errors:
@@ -457,36 +508,46 @@ class RiskCalculator:
 
     def _safe_div(self, numerator: Decimal, denominator: Decimal) -> Decimal:
         """安全除法，避免除零导致整次计算失败。"""
-        try:
-            if denominator == ZERO:
-                return ZERO
-            return numerator / denominator
-        except Exception:
+        if denominator == ZERO:
             return ZERO
+        try:
+            result = numerator / denominator
+        except DecimalException as exc:
+            raise ValueError("计算过程中出现无效除法，请检查参数范围") from exc
+        if not result.is_finite():
+            raise ValueError("计算结果超出有限数字范围，请检查参数和浓度")
+        return result
 
     def _safe_min(self, left: Decimal, right: Decimal) -> Decimal:
         """安全取最小值。"""
-        try:
-            return min(left, right)
-        except Exception:
-            return ZERO
+        if not left.is_finite() or not right.is_finite():
+            raise ValueError("计算中间量不是有限数字，请检查参数和污染物属性")
+        return min(left, right)
 
     def _ln(self, value: Decimal) -> Decimal:
         """安全求自然对数。"""
+        if value <= ZERO:
+            raise ValueError("计算过程要求自然对数的参数大于 0")
         try:
-            return value.ln()
-        except Exception:
+            result = value.ln()
+        except DecimalException:
             try:
-                return Decimal(str(math.log(float(value))))
-            except Exception:
-                return ZERO
+                result = Decimal(str(math.log(float(value))))
+            except (ValueError, OverflowError, DecimalException) as exc:
+                raise ValueError("计算过程中的自然对数无效") from exc
+        if not result.is_finite():
+            raise ValueError("计算过程中的自然对数超出有限数字范围")
+        return result
 
     def _pow_e(self, value: Decimal) -> Decimal:
         """安全计算 e 的指数次幂。"""
         try:
-            return Decimal(str(math.e ** float(value)))
-        except Exception:
-            return ZERO
+            result = Decimal(str(math.e ** float(value)))
+        except (ValueError, OverflowError, DecimalException) as exc:
+            raise ValueError("计算过程中的指数结果超出有限数字范围") from exc
+        if not result.is_finite():
+            raise ValueError("计算过程中的指数结果超出有限数字范围")
+        return result
 
     def _sfd(self, pollutant) -> Decimal:
         """皮肤接触路径用到的斜率因子折算。"""

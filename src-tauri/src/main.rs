@@ -7,15 +7,17 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tauri::{Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use uuid::Uuid;
 
 struct BackendState(Mutex<Option<ManagedBackend>>);
 
 struct BackendConfig {
     api_base: String,
+    api_token: String,
 }
 
 enum BackendProcess {
@@ -60,18 +62,21 @@ fn resolve_backend_api_base(config: tauri::State<'_, BackendConfig>) -> String {
     config.api_base.clone()
 }
 
-fn generate_shutdown_token() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:x}-{:x}", std::process::id(), nanos)
+#[tauri::command]
+fn resolve_backend_api_token(config: tauri::State<'_, BackendConfig>) -> String {
+    // 令牌只保存在本次桌面进程内，不写入磁盘，也不复用到下一次启动。
+    config.api_token.clone()
+}
+
+fn generate_token() -> String {
+    Uuid::new_v4().simple().to_string()
 }
 
 fn spawn_backend(
     app: &tauri::AppHandle,
     port: u16,
     shutdown_token: &str,
+    api_token: &str,
 ) -> Result<BackendProcess, String> {
     // 开发态直接跑 backend/main.py，方便我们热调前后端。
     if cfg!(debug_assertions) {
@@ -85,6 +90,7 @@ fn spawn_backend(
             .arg("--port")
             .arg(port.to_string())
             .env("RISK_SHUTDOWN_TOKEN", shutdown_token)
+            .env("RISK_API_TOKEN", api_token)
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
@@ -97,7 +103,8 @@ fn spawn_backend(
         .shell()
         .sidecar("risk-backend")
         .map_err(|error| error.to_string())?
-        .env("RISK_SHUTDOWN_TOKEN", shutdown_token);
+        .env("RISK_SHUTDOWN_TOKEN", shutdown_token)
+        .env("RISK_API_TOKEN", api_token);
     let port_arg = port.to_string();
     let (mut rx, child) = sidecar_command
         .args(["--host", "127.0.0.1", "--port", &port_arg])
@@ -134,9 +141,22 @@ fn request_backend_shutdown(port: u16, shutdown_token: &str) {
     }
 }
 
+fn wait_for_backend_exit(port: u16) {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    for _ in 0..30 {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(80)).is_err() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn stop_backend(backend: ManagedBackend) {
     request_backend_shutdown(backend.port, &backend.shutdown_token);
-    // HTTP 服务优雅退出后再清理外层进程；若后端启动失败，这里仍能兜底 kill。
+    // 先等待真正监听端口的 Python 子进程退出，再清理 PyInstaller 外层进程。
+    // 只 sleep 一个固定的很短时间在 Windows 慢机器上不够，容易留下后台进程。
+    wait_for_backend_exit(backend.port);
+    // 若后端启动失败或没有及时响应，仍然通过句柄兜底清理外层进程。
     match backend.process {
         BackendProcess::Dev(mut child) => {
             let _ = child.kill();
@@ -152,7 +172,9 @@ fn main() {
     let backend_port =
         resolve_backend_port().expect("failed to reserve a localhost port for the backend");
     let backend_api_base = format!("http://127.0.0.1:{backend_port}");
-    let shutdown_token = generate_shutdown_token();
+    let shutdown_token = generate_token();
+    let api_token = generate_token();
+    let backend_api_token = api_token.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -162,12 +184,21 @@ fn main() {
         .manage(BackendState(Mutex::new(None)))
         .manage(BackendConfig {
             api_base: backend_api_base,
+            api_token,
         })
-        .invoke_handler(tauri::generate_handler![resolve_backend_api_base])
+        .invoke_handler(tauri::generate_handler![
+            resolve_backend_api_base,
+            resolve_backend_api_token
+        ])
         .setup(move |app| {
             // 应用启动阶段就拉起后端，确保前端打开后很快能完成健康检查。
-            let child = spawn_backend(app.handle(), backend_port, &shutdown_token)
-                .map_err(io::Error::other)?;
+            let child = spawn_backend(
+                app.handle(),
+                backend_port,
+                &shutdown_token,
+                &backend_api_token,
+            )
+            .map_err(io::Error::other)?;
             let state = app.state::<BackendState>();
             *state.0.lock().expect("failed to lock backend state") = Some(ManagedBackend {
                 process: child,

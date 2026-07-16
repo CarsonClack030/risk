@@ -9,6 +9,7 @@ const GITEE_REPOSITORY = "CarsonClack030/risk";
 const GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases?page=1&per_page=20&direction=desc`;
 const GITHUB_LATEST_RELEASE_API =
   "https://api.github.com/repos/CarsonClack030/risk/releases/latest";
+const UPDATE_REQUEST_TIMEOUT_MS = 6_000;
 
 function canonicalReleaseUrl(tagName) {
   const encodedTag = encodeURIComponent(String(tagName || "").trim());
@@ -48,14 +49,34 @@ export async function getCurrentAppVersion() {
   }
 }
 
-async function fetchGiteeRelease(request) {
+async function requestWithTimeout(request, url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await request(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("更新查询超时。", { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchGiteeRelease(request, timeoutMs) {
   let response;
   try {
-    response = await request(GITEE_RELEASES_API, {
-      headers: {
-        Accept: "application/json",
+    response = await requestWithTimeout(
+      request,
+      GITEE_RELEASES_API,
+      {
+        headers: {
+          Accept: "application/json",
+        },
       },
-    });
+      timeoutMs,
+    );
   } catch (error) {
     throw new Error("无法连接 Gitee 更新服务。", { cause: error });
   }
@@ -71,14 +92,19 @@ async function fetchGiteeRelease(request) {
   return Array.isArray(releases) ? releases.find((item) => item && item.prerelease !== true) : null;
 }
 
-async function fetchGitHubRelease(request) {
+async function fetchGitHubRelease(request, timeoutMs) {
   let response;
   try {
-    response = await request(GITHUB_LATEST_RELEASE_API, {
-      headers: {
-        Accept: "application/vnd.github+json",
+    response = await requestWithTimeout(
+      request,
+      GITHUB_LATEST_RELEASE_API,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+        },
       },
-    });
+      timeoutMs,
+    );
   } catch (error) {
     throw new Error("无法连接 GitHub 备用更新服务。", { cause: error });
   }
@@ -96,13 +122,17 @@ async function fetchGitHubRelease(request) {
 
 // Gitee 是国内用户的首选更新源。它的匿名 API 偶尔会因访问频率返回 403，
 // 此时仅改用 GitHub 获取版本元数据；安装包下载页仍固定为可信的 Gitee Release。
-export async function checkForUpdates(currentVersion, request = fetch) {
+export async function checkForUpdates(
+  currentVersion,
+  request = fetch,
+  { timeoutMs = UPDATE_REQUEST_TIMEOUT_MS } = {},
+) {
   let release;
   try {
-    release = await fetchGiteeRelease(request);
+    release = await fetchGiteeRelease(request, timeoutMs);
   } catch (_giteeError) {
     try {
-      release = await fetchGitHubRelease(request);
+      release = await fetchGitHubRelease(request, timeoutMs);
     } catch (_githubError) {
       throw new Error("暂时无法连接更新服务，请检查网络后稍后重试。");
     }

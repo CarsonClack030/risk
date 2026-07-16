@@ -22,6 +22,18 @@ class ApplicationNumberValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "有限数字"):
             WorkspaceImporter._parse_decimal("NaN", "地表浓度")
 
+    def test_concentration_rejects_negative_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "不能小于 0"):
+            WorkspaceImporter._parse_decimal("-1", "地表浓度")
+
+    def test_positive_integer_rejects_fraction_and_boolean(self) -> None:
+        for value in ("1.5", True, 0):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, "正整数"),
+            ):
+                RiskBackend._parse_positive_integer(value, "工作区序号")
+
 
 if __name__ == "__main__":
     unittest.main()

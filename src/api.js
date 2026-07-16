@@ -9,18 +9,21 @@ import { isTauriRuntime } from "./runtime";
 // 1. 纯 Web 调试时，通过 Vite 环境变量或固定地址访问本地后端。
 // 2. Tauri 命令调用失败时，退回到默认本地地址。
 const FALLBACK_API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:38911";
+const FALLBACK_API_TOKEN = import.meta.env.VITE_API_TOKEN || "";
 let resolvedApiBase = null;
 let resolvingApiBasePromise = null;
+let resolvedApiToken = null;
+let resolvingApiTokenPromise = null;
 
 // API 基地址解析的顺序很重要：
-// 1. 先尊重显式配置的 VITE_API_BASE，方便开发时手工指定后端。
-// 2. 如果运行在 Tauri 中，就向 Rust 壳询问真正的后端地址。
+// 1. 如果运行在 Tauri 中，就向 Rust 壳询问真正的后端地址。
 //    这样即使默认端口被占用，前端也能拿到自动回退后的实际端口。
+// 2. 纯 Web 调试时才使用 VITE_API_BASE。
 // 3. 如果以上都失败，再退回到默认本地地址。
 //
 // 这里仍然做缓存，但只缓存“可靠拿到的结果”：
-// - 显式配置的 VITE_API_BASE
 // - Tauri 命令成功返回的真实地址
+// - 显式配置的 VITE_API_BASE
 // - 非 Tauri 环境下的固定 fallback
 //
 // 如果 Tauri 命令偶发失败，就先临时退回 fallback，
@@ -35,11 +38,6 @@ async function resolveApiBase({ force = false } = {}) {
   }
 
   resolvingApiBasePromise = (async () => {
-    if (import.meta.env.VITE_API_BASE) {
-      resolvedApiBase = import.meta.env.VITE_API_BASE;
-      return resolvedApiBase;
-    }
-
     if (isTauriRuntime()) {
       try {
         const apiBase = await invoke("resolve_backend_api_base");
@@ -47,8 +45,12 @@ async function resolveApiBase({ force = false } = {}) {
         return apiBase;
       } catch (error) {
         console.warn("Failed to resolve backend API base from Tauri, using fallback.", error);
-        return FALLBACK_API_BASE;
       }
+    }
+
+    if (import.meta.env.VITE_API_BASE) {
+      resolvedApiBase = import.meta.env.VITE_API_BASE;
+      return resolvedApiBase;
     }
 
     resolvedApiBase = FALLBACK_API_BASE;
@@ -62,16 +64,51 @@ async function resolveApiBase({ force = false } = {}) {
   }
 }
 
+async function resolveApiToken({ force = false } = {}) {
+  if (!force && resolvedApiToken !== null) {
+    return resolvedApiToken;
+  }
+  if (!force && resolvingApiTokenPromise) {
+    return resolvingApiTokenPromise;
+  }
+
+  resolvingApiTokenPromise = (async () => {
+    if (isTauriRuntime()) {
+      try {
+        resolvedApiToken = await invoke("resolve_backend_api_token");
+        return resolvedApiToken;
+      } catch (error) {
+        console.warn("Failed to resolve backend API token from Tauri.", error);
+      }
+    }
+    if (import.meta.env.VITE_API_TOKEN) {
+      resolvedApiToken = import.meta.env.VITE_API_TOKEN;
+      return resolvedApiToken;
+    }
+    resolvedApiToken = FALLBACK_API_TOKEN;
+    return resolvedApiToken;
+  })();
+
+  try {
+    return await resolvingApiTokenPromise;
+  } finally {
+    resolvingApiTokenPromise = null;
+  }
+}
+
 // 统一的请求封装：
 // - 自动拼接基地址
 // - 自动补 JSON 头
 // - 自动把后端错误转换为前端可读的 Error
 // - 自动区分 JSON 响应和二进制响应（例如 Excel 导出）
-async function performRequest(apiBase, path, options = {}) {
+async function performRequest(apiBase, apiToken, path, options = {}) {
   const { headers: providedHeaders, ...requestOptions } = options;
   const headers = new Headers(providedHeaders);
   if (typeof requestOptions.body === "string" && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+  if (apiToken) {
+    headers.set("X-Risk-Api-Token", apiToken);
   }
   const response = await fetch(`${apiBase}${path}`, {
     ...requestOptions,
@@ -97,20 +134,25 @@ async function performRequest(apiBase, path, options = {}) {
 }
 
 async function request(path, options = {}) {
-  const apiBase = await resolveApiBase();
+  const [apiBase, apiToken] = await Promise.all([resolveApiBase(), resolveApiToken()]);
   try {
-    return await performRequest(apiBase, path, options);
+    return await performRequest(apiBase, apiToken, path, options);
   } catch (error) {
     // 如果最初拿到的是 fallback 地址，或者动态端口解析失败过，
     // 就再强制问一次 Rust 壳，看看是否能拿到真正的后端端口。
     if (isTauriRuntime() && error instanceof TypeError) {
       const refreshedApiBase = await resolveApiBase({ force: true });
+      const refreshedApiToken = await resolveApiToken({ force: true });
       if (refreshedApiBase !== apiBase) {
-        return performRequest(refreshedApiBase, path, options);
+        return performRequest(refreshedApiBase, refreshedApiToken, path, options);
       }
     }
     throw error;
   }
+}
+
+function adminHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 // 把查询参数对象转成 URL 上的 ?a=1&b=2 形式。
@@ -180,23 +222,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
-  updatePassword: (payload) =>
+  logout: (token) =>
+    request("/api/auth/logout", {
+      method: "POST",
+      body: "{}",
+      headers: adminHeaders(token),
+    }),
+  updatePassword: (payload, token) =>
     request("/api/auth/password", {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: adminHeaders(token),
     }),
-  addPollutant: (payload) =>
+  addPollutant: (payload, token) =>
     request("/api/admin/pollutants", {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: adminHeaders(token),
     }),
-  updatePollutant: (pollutantId, payload) =>
+  updatePollutant: (pollutantId, payload, token) =>
     request(`/api/admin/pollutants/${pollutantId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+      headers: adminHeaders(token),
     }),
-  deletePollutant: (pollutantId, keyword = "") =>
+  deletePollutant: (pollutantId, keyword = "", token) =>
     request(`/api/admin/pollutants/${pollutantId}${qs({ keyword })}`, {
       method: "DELETE",
+      headers: adminHeaders(token),
     }),
 };

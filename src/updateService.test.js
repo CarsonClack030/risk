@@ -63,6 +63,32 @@ test("Gitee 与 GitHub 都不可用时返回统一的友好提示", async () => 
   );
 });
 
+test("Gitee 查询超时后会继续尝试 GitHub 备用源", async () => {
+  let requestCount = 0;
+  const result = await checkForUpdates(
+    "1.1.6",
+    async (_url, options) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }
+      return giteeResponse(200, {
+        tag_name: "v1.1.7",
+        name: "Risk Studio v1.1.7",
+        body: "timeout fallback",
+        html_url: "https://github.com/CarsonClack030/risk/releases/tag/v1.1.7",
+      });
+    },
+    { timeoutMs: 5 },
+  );
+
+  assert.equal(requestCount, 2);
+  assert.equal(result.status, "available");
+  assert.equal(result.latestVersion, "1.1.7");
+});
+
 test("更高的 Gitee Release 会触发更新确认", async () => {
   const result = await checkForUpdates("0.1.0", async () =>
     giteeResponse(200, [

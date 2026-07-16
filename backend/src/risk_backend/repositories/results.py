@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from decimal import Decimal
+
 from risk_backend.repositories.database import connect
 
 
@@ -91,30 +94,49 @@ class ResultRepository:
         "db_cv": ("RCVS_n", "HCVS_n", "RCVG_n", "HCVG_n", "CVS_pgw"),
     }
 
-    def reset(self) -> None:
-        """清空所有结果值，但保留工作区占位行。"""
+    def replace_results(
+        self,
+        results: dict[int, dict[str, dict[str, object]]],
+    ) -> None:
+        """Replace every result value atomically using one SQLite transaction."""
+        grouped_updates: dict[tuple[str, tuple[str, ...]], list[tuple[object, ...]]] = (
+            defaultdict(list)
+        )
+        for workspace_number, table_values in results.items():
+            for table, values in table_values.items():
+                if not values:
+                    continue
+                self._validate_update(table, values)
+                columns = tuple(values)
+                grouped_updates[(table, columns)].append(
+                    tuple(self._database_value(values[column]) for column in columns)
+                    + (workspace_number,)
+                )
+
         with connect() as con:
             for table, columns in self.RESET_SQL.items():
                 assignment = ", ".join(f"{column} = NULL" for column in columns)
                 con.execute(f"update {table} set {assignment}")
 
-    def update_table(
-        self, table: str, workspace_number: int, values: dict[str, object]
-    ) -> None:
-        """把某条工作区记录的计算结果写回指定结果表。"""
-        if not values:
-            return
-        set_sql = ", ".join(f"{column} = ?" for column in values)
-        params = [
-            float(value) if hasattr(value, "quantize") else value
-            for value in values.values()
-        ]
-        params.append(workspace_number)
-        with connect() as con:
-            con.execute(
-                f"update {table} set {set_sql} where number = ?",
-                params,
-            )
+            for (table, columns), params in grouped_updates.items():
+                set_sql = ", ".join(f"{column} = ?" for column in columns)
+                con.executemany(
+                    f"update {table} set {set_sql} where number = ?",
+                    params,
+                )
+
+    def _validate_update(self, table: str, values: dict[str, object]) -> None:
+        allowed_columns = self.RESET_SQL.get(table)
+        if allowed_columns is None:
+            raise ValueError(f"不支持的结果表：{table}")
+        invalid_columns = set(values).difference(allowed_columns)
+        if invalid_columns:
+            names = "、".join(sorted(invalid_columns))
+            raise ValueError(f"结果表 {table} 包含不支持的列：{names}")
+
+    @staticmethod
+    def _database_value(value: object) -> object:
+        return float(value) if isinstance(value, Decimal) else value
 
     def fetch_table(self, table: str) -> list[list[object]]:
         """按工作区序号读取结果表，用于前端展示和导出。

@@ -4,9 +4,13 @@ import os
 import shutil
 import sqlite3
 import sys
+import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+from datetime import datetime, timezone
 from pathlib import Path
+
+from risk_backend.security import hash_password, is_password_hash
 
 # 这个文件负责“运行数据库”的生命周期管理。
 # 模板数据库是只读资源，真正运行时会复制到用户目录下，
@@ -27,6 +31,9 @@ WORKSPACE_TABLES = (
     "db_phq",
     "db_cv",
 )
+DATABASE_SCHEMA_VERSION = 1
+MAX_DATABASE_BACKUPS = 3
+_DATABASE_LOCK = threading.Lock()
 
 
 def application_data_dir() -> Path:
@@ -90,6 +97,53 @@ def _clear_workspace_tables(database_path: Path) -> None:
         connection.close()
 
 
+def _backup_database(database_path: Path) -> Path:
+    """Create a timestamped copy before changing an existing user database."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_path = database_path.with_name(f"{database_path.stem}.backup-{timestamp}.db")
+    shutil.copy2(database_path, backup_path)
+    with suppress(OSError):
+        backup_path.chmod(0o600)
+
+    backups = sorted(
+        database_path.parent.glob(f"{database_path.stem}.backup-*.db"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for stale_backup in backups[MAX_DATABASE_BACKUPS:]:
+        with suppress(OSError):
+            stale_backup.unlink()
+    return backup_path
+
+
+def _migrate_database(database_path: Path, *, existing_database: bool) -> None:
+    """Upgrade an old runtime database without discarding user data."""
+    with sqlite3.connect(database_path) as connection:
+        current_version = int(connection.execute("pragma user_version").fetchone()[0])
+
+    if current_version > DATABASE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"运行数据库版本 {current_version} 高于软件支持的版本 "
+            f"{DATABASE_SCHEMA_VERSION}，请升级软件后再试"
+        )
+    if current_version == DATABASE_SCHEMA_VERSION:
+        return
+    if existing_database:
+        _backup_database(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        if current_version < 1:
+            users = connection.execute("select id, password from db_users").fetchall()
+            for user_id, stored_password in users:
+                password = str(stored_password or "")
+                if not is_password_hash(password):
+                    connection.execute(
+                        "update db_users set password = ? where id = ?",
+                        (hash_password(password), user_id),
+                    )
+        connection.execute(f"pragma user_version = {DATABASE_SCHEMA_VERSION}")
+
+
 def ensure_database() -> Path:
     """确保运行数据库存在。
 
@@ -99,9 +153,14 @@ def ensure_database() -> Path:
     后续运行时：
     - 直接复用已存在的 risk_app.db
     """
-    if not RUNTIME_DB.exists():
-        shutil.copy2(TEMPLATE_DB, RUNTIME_DB)
-        _clear_workspace_tables(RUNTIME_DB)
+    with _DATABASE_LOCK:
+        existed = RUNTIME_DB.exists()
+        if not existed:
+            shutil.copy2(TEMPLATE_DB, RUNTIME_DB)
+            _clear_workspace_tables(RUNTIME_DB)
+        _migrate_database(RUNTIME_DB, existing_database=existed)
+        with suppress(OSError):
+            RUNTIME_DB.chmod(0o600)
     return RUNTIME_DB
 
 

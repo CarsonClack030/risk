@@ -4,7 +4,15 @@ import { useEffect, useId, useRef } from "react";
 // App.jsx 会非常大，如果连弹窗、卡片、表格这些基础结构也全写在里面，
 // 学习时会很难分清“页面业务逻辑”和“可复用 UI 组件”的边界。
 
-export function Modal({ title, subtitle, size = "lg", onClose, children, actions }) {
+export function Modal({
+  title,
+  subtitle,
+  size = "lg",
+  onClose,
+  children,
+  actions,
+  backdropClassName = "",
+}) {
   const titleId = useId();
 
   useEffect(() => {
@@ -16,7 +24,10 @@ export function Modal({ title, subtitle, size = "lg", onClose, children, actions
   }, [onClose]);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className={`modal-backdrop ${backdropClassName}`.trim()}
+      onClick={onClose}
+    >
       <div
         aria-labelledby={titleId}
         aria-modal="true"

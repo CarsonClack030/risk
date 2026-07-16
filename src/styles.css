@@ -732,6 +732,11 @@ button:disabled {
   background: rgba(17, 26, 30, 0.38);
 }
 
+/* 错误提示必须盖在当前编辑弹窗上方，否则参数校验失败时用户看不到提示。 */
+.modal-backdrop-error {
+  z-index: 80;
+}
+
 .modal-shell {
   width: min(1280px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);

@@ -213,6 +213,8 @@ class WorkspaceImporter:
             raise ValueError(f"{label}不是合法数字（当前值：{value}）") from None
         if not parsed.is_finite():
             raise ValueError(f"{label}必须是有限数字（当前值：{value}）")
+        if parsed < 0:
+            raise ValueError(f"{label}不能小于 0（当前值：{value}）")
         return parsed
 
     @staticmethod

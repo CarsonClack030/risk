@@ -20,6 +20,7 @@ RESULT_TABLES = (
     "db_phq",
     "db_cv",
 )
+SQL_LOOKUP_BATCH_SIZE = 500
 
 
 class WorkspaceRepository:
@@ -247,7 +248,34 @@ class WorkspaceRepository:
         更新依据是 workspace_number，而不是 pollutant_id，
         原因同样是：同一污染物可能在工作区里出现多次。
         """
+        if not items:
+            return
+        workspace_numbers = [item.workspace_number for item in items]
+        if len(workspace_numbers) != len(set(workspace_numbers)):
+            raise ValueError("工作区浓度数据中存在重复序号")
+
         with connect() as con:
+            existing: dict[int, int] = {}
+            for start in range(0, len(workspace_numbers), SQL_LOOKUP_BATCH_SIZE):
+                batch = workspace_numbers[start : start + SQL_LOOKUP_BATCH_SIZE]
+                placeholders = ", ".join("?" for _item in batch)
+                rows = con.execute(
+                    f"select number, ID from db_pol_temp where number in ({placeholders})",
+                    batch,
+                ).fetchall()
+                existing.update({int(row["number"]): int(row["ID"]) for row in rows})
+            missing = [number for number in workspace_numbers if number not in existing]
+            if missing:
+                missing_text = "、".join(str(number) for number in missing[:5])
+                raise ValueError(f"未找到工作区序号：{missing_text}")
+            mismatched = [
+                item.workspace_number
+                for item in items
+                if existing[item.workspace_number] != item.pollutant_id
+            ]
+            if mismatched:
+                numbers = "、".join(str(number) for number in mismatched[:5])
+                raise ValueError(f"工作区序号与污染物编号不匹配：{numbers}")
             for item in items:
                 con.execute(
                     """

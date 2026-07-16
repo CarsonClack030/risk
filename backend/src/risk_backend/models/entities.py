@@ -119,6 +119,10 @@ class SiteSelection:
         # 参数表里四类列名是固定命名模式：
         # data_gi / data_gii / data_zi / data_zii
         # 所以这里直接拼接出当前应该读取哪一列。
+        if self.standard not in {"G", "Z"}:
+            raise ValueError("适用标准只能选择 G 或 Z")
+        if self.area_type not in {"I", "II"}:
+            raise ValueError("用地类型只能选择 I 或 II")
         return f"data_{self.standard}{self.area_type}"
 
 

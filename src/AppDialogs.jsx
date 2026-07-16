@@ -55,6 +55,7 @@ export function ErrorDialog({ message, onClose }) {
       title="操作失败"
       subtitle="请根据提示检查当前输入、工作区或导入文件。"
       size="sm"
+      backdropClassName="modal-backdrop-error"
       onClose={onClose}
       actions={
         <button className="primary-button" onClick={onClose} type="button">

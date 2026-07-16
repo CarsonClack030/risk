@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 from decimal import Decimal
+from unittest.mock import MagicMock
 
+from risk_backend.application import RiskBackend
 from risk_backend.models.entities import SiteSelection
 from risk_backend.repositories.parameters import PARAMETER_NAMES
 from risk_backend.services.calculator import RiskCalculator
@@ -72,6 +74,32 @@ class ParameterValidationTests(unittest.TestCase):
         values["Theta_wcrack"] = Decimal("0.4")
         with self.assertRaisesRegex(ValueError, "地基裂隙总孔隙体积比"):
             self.validate(values)
+
+    def test_invalid_selection_is_rejected_before_parameter_lookup(self) -> None:
+        calculator = RiskCalculator(FakeParameterRepository(valid_parameter_values()))
+        with self.assertRaisesRegex(ValueError, "适用标准"):
+            calculator.calculate(
+                SiteSelection("DROP", "I"),
+                [],
+                {"ois": True},
+            )
+
+    def test_invalid_log_domain_has_clear_error(self) -> None:
+        values = valid_parameter_values()
+        values["Z_crack"] = Decimal("0.0001")
+        with self.assertRaisesRegex(ValueError, "对数无效"):
+            self.validate(values)
+
+    def test_string_false_is_not_treated_as_selected_pathway(self) -> None:
+        backend = RiskBackend.__new__(RiskBackend)
+        backend.workspace_repository = MagicMock()
+        backend.workspace_repository.list_selected_pollutants.return_value = [object()]
+        backend.calculator = MagicMock()
+
+        with self.assertRaisesRegex(ValueError, "至少选择一个暴露途径"):
+            backend.calculate({"pathways": {"ois": "false"}})
+
+        backend.calculator.calculate.assert_not_called()
 
 
 if __name__ == "__main__":

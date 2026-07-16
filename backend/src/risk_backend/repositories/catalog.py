@@ -159,6 +159,19 @@ class CatalogRepository:
             ).fetchone()
         return _row_to_pollutant(row) if row else None
 
+    def count_workspace_references(self, pollutant_id: int) -> int:
+        """统计工作区中引用某条目录记录的行数。
+
+        工作区表会冗余保存名称和编号，但结果表仍依赖目录中的理化参数。
+        因此删除或改名之前必须先确认没有活动工作区引用，避免留下无法计算的孤儿行。
+        """
+        with connect() as con:
+            row = con.execute(
+                "select count(*) as total from db_pol_temp where ID = ?",
+                (pollutant_id,),
+            ).fetchone()
+        return int(row["total"] if row else 0)
+
     def find_by_name(self, name: str) -> Pollutant | None:
         """按中文名查找污染物，优先精确匹配，再尝试模糊匹配。
 
