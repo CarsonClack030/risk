@@ -148,6 +148,19 @@ def _backup_database(database_path: Path) -> Path:
     return backup_path
 
 
+def _checkpoint_database(database_path: Path) -> None:
+    """Flush SQLite WAL pages before copying or replacing a database file."""
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("pragma wal_checkpoint(truncate)")
+
+
+def _remove_database_sidecars(database_path: Path) -> None:
+    """Remove WAL sidecars that belong to a database being replaced."""
+    for suffix in ("-wal", "-shm"):
+        with suppress(OSError):
+            database_path.with_name(database_path.name + suffix).unlink()
+
+
 def _migrate_database(database_path: Path, *, existing_database: bool) -> None:
     """Upgrade an old runtime database without discarding user data."""
     with sqlite3.connect(database_path) as connection:
@@ -364,13 +377,19 @@ def replace_runtime_database(project_bytes: bytes) -> None:
             temporary_path.chmod(0o600)
             _validate_project_database(temporary_path)
             _migrate_database(temporary_path, existing_database=False)
+            # Both the runtime database and the imported temporary database may
+            # use WAL mode.  Their sidecars must not survive an atomic swap.
+            _checkpoint_database(RUNTIME_DB)
             _backup_database(RUNTIME_DB)
+            _remove_database_sidecars(RUNTIME_DB)
+            _remove_database_sidecars(temporary_path)
             os.replace(temporary_path, RUNTIME_DB)
             temporary_path = None
             with suppress(OSError):
                 RUNTIME_DB.chmod(0o600)
     finally:
         if temporary_path is not None:
+            _remove_database_sidecars(temporary_path)
             with suppress(OSError):
                 temporary_path.unlink()
 

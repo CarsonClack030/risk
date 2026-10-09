@@ -79,6 +79,10 @@ class ProjectDatabaseTests(unittest.TestCase):
             ):
                 database.replace_runtime_database(project_path.read_bytes())
 
+            # The imported database may use WAL mode.  The old runtime sidecars
+            # must be gone before SQLite opens the newly swapped-in database.
+            self.assertFalse(runtime_path.with_name("risk_app.db-wal").exists())
+            self.assertFalse(runtime_path.with_name("risk_app.db-shm").exists())
             with sqlite3.connect(runtime_path) as connection:
                 self.assertEqual(
                     connection.execute("select count(*) from db_pol_temp").fetchone()[
