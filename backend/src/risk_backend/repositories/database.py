@@ -148,10 +148,16 @@ def _backup_database(database_path: Path) -> Path:
     return backup_path
 
 
-def _prepare_database_for_swap(database_path: Path) -> None:
-    """Flush WAL pages and use a sidecar-free mode before replacing a database."""
+def _checkpoint_database(database_path: Path) -> None:
+    """Flush SQLite WAL pages before copying or replacing a database file."""
     with sqlite3.connect(database_path) as connection:
         connection.execute("pragma wal_checkpoint(truncate)")
+
+
+def _prepare_imported_database(database_path: Path) -> None:
+    """Make an imported database safe to swap without carrying WAL sidecars."""
+    _checkpoint_database(database_path)
+    with sqlite3.connect(database_path) as connection:
         connection.execute("pragma journal_mode=delete")
 
 
@@ -380,8 +386,8 @@ def replace_runtime_database(project_bytes: bytes) -> None:
             _migrate_database(temporary_path, existing_database=False)
             # Both the runtime database and the imported temporary database may
             # use WAL mode.  Their sidecars must not survive an atomic swap.
-            _prepare_database_for_swap(RUNTIME_DB)
-            _prepare_database_for_swap(temporary_path)
+            _checkpoint_database(RUNTIME_DB)
+            _prepare_imported_database(temporary_path)
             _backup_database(RUNTIME_DB)
             _remove_database_sidecars(RUNTIME_DB)
             _remove_database_sidecars(temporary_path)
