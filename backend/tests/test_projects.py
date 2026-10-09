@@ -103,6 +103,7 @@ class ProjectDatabaseTests(unittest.TestCase):
                     ).fetchone()
                 )
             self.assertTrue(list(Path(directory).glob("risk_app.backup-*.db")))
+            self.assertFalse(list(Path(directory).glob("risk-project-*.db")))
 
     def test_operation_logs_are_exported_with_project_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

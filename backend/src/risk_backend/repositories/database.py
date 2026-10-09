@@ -157,7 +157,7 @@ def _checkpoint_database(database_path: Path) -> None:
         connection.close()
 
 
-def _prepare_imported_database(database_path: Path) -> None:
+def _prepare_imported_database(database_path: Path) -> Path:
     """Copy an imported database into a sidecar-free SQLite file.
 
     SQLite's backup API reads a consistent snapshot even when the source uses
@@ -181,9 +181,13 @@ def _prepare_imported_database(database_path: Path) -> None:
         finally:
             target.close()
             source.close()
+        # 不要把规范化文件再覆盖回 database_path。Windows 可能仍会短暂
+        # 锁定刚刚关闭的导入文件，导致 os.replace 报 WinError 5。让调用方
+        # 直接使用这个已经关闭连接的规范化文件，可以避开一次不必要的替换。
         _remove_database_sidecars(database_path)
-        os.replace(normalized_path, database_path)
+        result = normalized_path
         normalized_path = None
+        return result
     finally:
         if normalized_path is not None:
             _remove_database_sidecars(normalized_path)
@@ -410,6 +414,7 @@ def replace_runtime_database(project_bytes: bytes) -> None:
 
     ensure_database()
     temporary_path: Path | None = None
+    normalized_path: Path | None = None
     try:
         with _DATABASE_LOCK:
             with tempfile.NamedTemporaryFile(
@@ -427,11 +432,14 @@ def replace_runtime_database(project_bytes: bytes) -> None:
             # Both the runtime database and the imported temporary database may
             # use WAL mode.  Their sidecars must not survive an atomic swap.
             _checkpoint_database(RUNTIME_DB)
-            _prepare_imported_database(temporary_path)
+            normalized_path = _prepare_imported_database(temporary_path)
             _backup_database(RUNTIME_DB)
             _remove_database_sidecars(RUNTIME_DB)
             _remove_database_sidecars(temporary_path)
-            os.replace(temporary_path, RUNTIME_DB)
+            with suppress(OSError):
+                temporary_path.unlink()
+            os.replace(normalized_path, RUNTIME_DB)
+            normalized_path = None
             temporary_path = None
             with suppress(OSError):
                 RUNTIME_DB.chmod(0o600)
@@ -440,6 +448,10 @@ def replace_runtime_database(project_bytes: bytes) -> None:
             _remove_database_sidecars(temporary_path)
             with suppress(OSError):
                 temporary_path.unlink()
+        if normalized_path is not None:
+            _remove_database_sidecars(normalized_path)
+            with suppress(OSError):
+                normalized_path.unlink()
 
 
 @contextmanager
