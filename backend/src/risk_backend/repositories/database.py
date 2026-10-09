@@ -158,14 +158,37 @@ def _checkpoint_database(database_path: Path) -> None:
 
 
 def _prepare_imported_database(database_path: Path) -> None:
-    """Make an imported database safe to swap without carrying WAL sidecars."""
-    connection = sqlite3.connect(database_path, timeout=5)
+    """Copy an imported database into a sidecar-free SQLite file.
+
+    SQLite's backup API reads a consistent snapshot even when the source uses
+    WAL mode.  The destination starts with SQLite's default DELETE journal
+    mode, so an atomic file swap never inherits a source ``-wal`` or ``-shm``
+    file.
+    """
+    normalized_path: Path | None = None
     try:
-        connection.execute("pragma busy_timeout=5000")
-        connection.execute("pragma wal_checkpoint(truncate)")
-        connection.execute("pragma journal_mode=delete")
+        with tempfile.NamedTemporaryFile(
+            prefix="risk-project-normalized-",
+            suffix=".db",
+            dir=APP_DIR,
+            delete=False,
+        ) as normalized:
+            normalized_path = Path(normalized.name)
+        source = sqlite3.connect(database_path, timeout=5)
+        target = sqlite3.connect(normalized_path, timeout=5)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        _remove_database_sidecars(database_path)
+        os.replace(normalized_path, database_path)
+        normalized_path = None
     finally:
-        connection.close()
+        if normalized_path is not None:
+            _remove_database_sidecars(normalized_path)
+            with suppress(OSError):
+                normalized_path.unlink()
 
 
 def _remove_database_sidecars(database_path: Path) -> None:
