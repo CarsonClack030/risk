@@ -13,6 +13,7 @@ import {
   AdminPanelDialog,
   ConcentrationDialog,
   ErrorDialog,
+  OperationLogDialog,
   ParameterDialog,
   ResultDialog,
   UpdateDialog,
@@ -23,6 +24,7 @@ import {
   CatalogPanel,
   MetricsPanel,
   SiteControls,
+  ProjectStartScreen,
   SplashScreen,
   WorkspacePanel,
 } from "./AppPanels";
@@ -43,8 +45,13 @@ import {
   filenameFromPath,
   hasSupportedImportExtension,
   importContentType,
+  pickProjectFile,
+  pickProjectSavePath,
   pickWorkspaceImportFile,
+  saveCsvBlob,
   saveExcelBlob,
+  saveProjectBlob,
+  writeProjectBlob,
 } from "./fileTransfers";
 import { isTauriRuntime } from "./runtime";
 import {
@@ -64,6 +71,14 @@ function App() {
   // notice: 顶部成功提示
   // health: 后端健康检查及数据库统计
   const [booting, setBooting] = useState(true);
+  const [projectReady, setProjectReady] = useState(false);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [projectPath, setProjectPath] = useState("");
+  const [projectSaveState, setProjectSaveState] = useState("saved");
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectPath, setNewProjectPath] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState(null);
   const [health, setHealth] = useState(null);
@@ -71,6 +86,10 @@ function App() {
   const [appVersion, setAppVersion] = useState(PACKAGE_VERSION);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState(null);
+  const [operationLogs, setOperationLogs] = useState([]);
+  const [operationLogsLoading, setOperationLogsLoading] = useState(false);
+  const [operationLogModalOpen, setOperationLogModalOpen] = useState(false);
+  const [operationLogRevision, setOperationLogRevision] = useState(0);
 
   // ------------------------
   // 目录搜索相关状态
@@ -150,6 +169,8 @@ function App() {
   const workspaceImportInputRef = useRef(null);
   const catalogRequestIdRef = useRef(0);
   const adminRequestIdRef = useRef(0);
+  const pendingProjectSnapshotRef = useRef(null);
+  const projectSaveWorkerRef = useRef(false);
   // 用 ref 标记正在进行的更新请求，避免启动检查和用户点击恰好同时发出两次请求。
   const updateCheckInFlightRef = useRef(false);
 
@@ -171,6 +192,11 @@ function App() {
   const waitForHealthEvent = useEffectEvent(waitForHealth);
   const refreshCatalogEvent = useEffectEvent(refreshCatalog);
   const refreshAdminCatalogEvent = useEffectEvent(refreshAdminCatalog);
+  const queueProjectSnapshotEvent = useEffectEvent(queueProjectSnapshot);
+
+  const projectPathwaySnapshot = Object.fromEntries(
+    PATHWAYS.map(({ key }) => [key, pathways[key] === true]),
+  );
 
   // 桌面运行时读取安装包中的真实版本，随后立即静默检查一次 Gitee Release。
   // “静默”只表示网络失败或没有更新时不打断启动；发现新版本仍会正常弹窗询问。
@@ -202,10 +228,7 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // 启动流程：
-  // 1. 先轮询 health，等待 Python 后端真正起来。
-  // 2. 再并行拉取工作区、参数、结果表。
-  // 3. 最后一次性写入前端状态，减少首屏抖动。
+  // 启动流程只负责等待后端，项目数据在用户选择“打开”或“新建”后再读取。
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
@@ -215,21 +238,6 @@ function App() {
           return;
         }
         setHealth(alive);
-        const [workspace, parameters, resultTables] = await Promise.all([
-          api.listWorkspace(),
-          api.listParameters(),
-          api.listResults(),
-        ]);
-        if (cancelled) {
-          return;
-        }
-        startTransition(() => {
-          setWorkspaceItems(workspace.items);
-          setParameterGroups(parameters.groups);
-          setResults(resultTables.tables);
-        });
-        setActiveParameterGroupId(parameters.groups[0]?.id || 1);
-        setActiveResultKey(resultTables.tables[0]?.key || "db_exposure_ca");
         setBooting(false);
       } catch (loadError) {
         if (!cancelled) {
@@ -246,11 +254,11 @@ function App() {
 
   // 目录关键词变化后刷新污染物目录。
   useEffect(() => {
-    if (booting) {
+    if (booting || !projectReady) {
       return;
     }
     refreshCatalogEvent(deferredCatalogKeyword);
-  }, [booting, deferredCatalogKeyword]);
+  }, [booting, projectReady, deferredCatalogKeyword]);
 
   // 管理员面板打开后，管理员搜索框的关键词变化也会触发查询。
   useEffect(() => {
@@ -313,8 +321,220 @@ function App() {
     throw lastError;
   }
 
+  // 项目切换后统一加载工作区、参数和结果，避免启动页与工作台出现不同步。
+  async function loadProjectData(fallbackProjectName = "") {
+    const [workspace, parameters, resultTables, alive] = await Promise.all([
+      api.listWorkspace(),
+      api.listParameters(),
+      api.listResults(),
+      api.health(),
+    ]);
+    startTransition(() => {
+      setWorkspaceItems(workspace.items);
+      setParameterGroups(parameters.groups);
+      setResults(resultTables.tables);
+    });
+    setActiveParameterGroupId(parameters.groups[0]?.id || 1);
+    setActiveResultKey(resultTables.tables[0]?.key || "db_exposure_ca");
+    setSelectedWorkspaceNumber(null);
+    setHighlightedWorkspaceNumber(null);
+    setHealth(alive);
+    const metadata = alive.project || {};
+    setProjectName(String(metadata.name || fallbackProjectName || "未命名项目"));
+    setStandard(metadata.standard === "Z" ? "Z" : "G");
+    setAreaType(metadata.area_type === "II" ? "II" : "I");
+    setPathways({
+      ...createEmptyPathways(),
+      ...(metadata.pathways && typeof metadata.pathways === "object" ? metadata.pathways : {}),
+    });
+    return alive;
+  }
+
+  function openCreateProjectDialog() {
+    setNewProjectName("");
+    setNewProjectPath("");
+    setCreateProjectOpen(true);
+  }
+
+  async function handleChooseProjectPath() {
+    const trimmedName = newProjectName.trim();
+    if (!trimmedName) {
+      flash("error", "请先填写项目名称");
+      return;
+    }
+    try {
+      const selectedPath = await pickProjectSavePath(`${trimmedName}.riskproj`);
+      if (selectedPath) {
+        setNewProjectPath(selectedPath);
+      }
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
+  }
+
+  async function handleConfirmCreateProject() {
+    const name = newProjectName.trim();
+    if (!name) {
+      flash("error", "项目名称不能为空");
+      return;
+    }
+    if (/[\\/:*?"<>|]/.test(name)) {
+      flash("error", '项目名称不能包含 \\/ : * ? " < > | 等文件名特殊字符');
+      return;
+    }
+    if (!newProjectPath) {
+      flash("error", "请先选择项目保存位置");
+      return;
+    }
+    if (
+      health?.workspace_count &&
+      !window.confirm("当前已有工作区数据，新建项目会清空工作区和结果，是否继续？")
+    ) {
+      return;
+    }
+    setProjectBusy(true);
+    try {
+      const metadata = {
+        name,
+        standard: "G",
+        area_type: "I",
+        pathways: createEmptyPathways(),
+      };
+      await api.createProject(metadata);
+      await loadProjectData(name);
+      await writeProjectSnapshot({ path: newProjectPath, ...metadata });
+      setProjectPath(newProjectPath);
+      setProjectSaveState("saved");
+      setCreateProjectOpen(false);
+      setProjectReady(true);
+      flash("success", "新项目已创建");
+    } catch (loadError) {
+      flash("error", loadError.message);
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
+  async function handleOpenProject() {
+    setProjectBusy(true);
+    try {
+      const selectedFile = await pickProjectFile();
+      if (!selectedFile) {
+        return;
+      }
+      await api.importProject(selectedFile.filename, selectedFile.content);
+      const fallbackName = selectedFile.filename.replace(/\.riskproj$/i, "") || "已打开项目";
+      const alive = await loadProjectData(fallbackName);
+      const metadata = alive.project || {};
+      setProjectPath(selectedFile.path);
+      setProjectSaveState("saved");
+      setProjectReady(true);
+      flash("success", `已打开项目：${metadata.name || fallbackName}`);
+    } catch (loadError) {
+      flash("error", loadError.message);
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
+  async function handleSaveProject() {
+    try {
+      let targetPath = projectPath;
+      if (!targetPath) {
+        const defaultName = `${projectName || "未命名项目"}.riskproj`;
+        targetPath = await saveProjectBlob(await api.exportProject(), defaultName);
+        if (!targetPath) {
+          return;
+        }
+        setProjectPath(targetPath);
+      }
+      await writeProjectSnapshot({
+        path: targetPath,
+        name: projectName || "未命名项目",
+        standard,
+        area_type: areaType,
+        pathways: projectPathwaySnapshot,
+      });
+      setProjectSaveState("saved");
+      flash("success", `项目已保存：${filenameFromPath(targetPath)}`);
+    } catch (loadError) {
+      setProjectSaveState("error");
+      flash("error", loadError.message);
+    }
+  }
+
+  async function writeProjectSnapshot(snapshot) {
+    await api.updateProjectMetadata(snapshot);
+    const blob = await api.exportProject();
+    await writeProjectBlob(blob, snapshot.path);
+  }
+
+  function queueProjectSnapshot(snapshot) {
+    pendingProjectSnapshotRef.current = snapshot;
+    if (projectSaveWorkerRef.current) {
+      return;
+    }
+    projectSaveWorkerRef.current = true;
+    setProjectSaveState("saving");
+    void (async () => {
+      let failed = false;
+      while (pendingProjectSnapshotRef.current) {
+        const nextSnapshot = pendingProjectSnapshotRef.current;
+        pendingProjectSnapshotRef.current = null;
+        try {
+          await writeProjectSnapshot(nextSnapshot);
+        } catch (loadError) {
+          failed = true;
+          pendingProjectSnapshotRef.current = null;
+          flash("error", `项目自动保存失败：${loadError.message}`);
+        }
+      }
+      projectSaveWorkerRef.current = false;
+      setProjectSaveState(failed ? "error" : "saved");
+    })();
+  }
+
+  // 数据库写入完成后，延迟一点再导出快照，避免连续编辑时频繁写文件。
+  // 待保存队列只保留最新状态，保证快速输入不会把旧内容覆盖回项目文件。
+  useEffect(() => {
+    if (!projectReady || !projectPath || !projectName) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      queueProjectSnapshotEvent({
+        path: projectPath,
+        name: projectName,
+        standard,
+        area_type: areaType,
+        pathways: Object.fromEntries(PATHWAYS.map(({ key }) => [key, pathways[key] === true])),
+      });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [
+    projectReady,
+    projectPath,
+    projectName,
+    standard,
+    areaType,
+    pathways,
+    workspaceItems,
+    parameterGroups,
+    results,
+    operationLogRevision,
+  ]);
+
   // 成功继续用顶部绿色横幅；错误则改成弹窗提醒。
   function flash(kind, text) {
+    void api
+      .recordOperation({
+        level: kind === "error" ? "error" : kind === "warning" ? "warning" : "info",
+        action: "界面操作",
+        message: text,
+      })
+      .then(() => setOperationLogRevision((current) => current + 1))
+      .catch(() => {
+        // 日志写入失败不应覆盖原本要显示的成功或错误提示。
+      });
     if (kind === "error") {
       setErrorMessage(text);
       return;
@@ -371,9 +591,7 @@ function App() {
       setAvailableUpdate(null);
       flash("success", "已打开 Gitee 下载页面");
     } catch (loadError) {
-      if (requestId === catalogRequestIdRef.current) {
-        flash("error", loadError.message);
-      }
+      flash("error", loadError.message);
     }
   }
 
@@ -790,6 +1008,36 @@ function App() {
     }
   }
 
+  async function refreshOperationLogs() {
+    setOperationLogsLoading(true);
+    try {
+      const payload = await api.listOperationLogs();
+      setOperationLogs(payload.items || []);
+    } catch (loadError) {
+      setErrorMessage(loadError.message);
+    } finally {
+      setOperationLogsLoading(false);
+    }
+  }
+
+  function handleOpenOperationLogs() {
+    setOperationLogModalOpen(true);
+    void refreshOperationLogs();
+  }
+
+  async function handleExportOperationLogs() {
+    try {
+      const blob = await api.exportOperationLogs();
+      const savedPath = await saveCsvBlob(blob, "Risk Studio 操作日志.csv");
+      if (!savedPath) {
+        return;
+      }
+      flash("success", `操作日志已保存：${filenameFromPath(savedPath)}`);
+    } catch (loadError) {
+      flash("error", loadError.message);
+    }
+  }
+
   // 打开管理员登录框时，默认带上上次登录名，方便重复登录。
   function handleOpenAdmin() {
     setLoginForm({ username: adminUser || "", password: "" });
@@ -928,6 +1176,27 @@ function App() {
     return <SplashScreen />;
   }
 
+  if (!projectReady) {
+    return (
+      <>
+        <ProjectStartScreen
+          version={appVersion}
+          busy={projectBusy}
+          onOpenProject={handleOpenProject}
+          createOpen={createProjectOpen}
+          projectName={newProjectName}
+          projectPath={newProjectPath}
+          onCreateProject={openCreateProjectDialog}
+          onProjectNameChange={setNewProjectName}
+          onChooseProjectPath={handleChooseProjectPath}
+          onCancelCreate={() => setCreateProjectOpen(false)}
+          onConfirmCreate={handleConfirmCreateProject}
+        />
+        <ErrorDialog message={errorMessage} onClose={() => setErrorMessage("")} />
+      </>
+    );
+  }
+
   return (
     <div className="app-shell">
       <div className="bg-orb orb-one" />
@@ -935,11 +1204,16 @@ function App() {
 
       <AppHeader
         version={appVersion}
+        projectName={projectName}
+        projectSaveState={projectSaveState}
         checkingUpdate={checkingUpdate}
         onCheckUpdate={handleCheckForUpdates}
         onOpenParameters={openParameterModal}
         onOpenAdmin={handleOpenAdmin}
         onOpenResults={() => setResultModalOpen(true)}
+        onOpenProject={handleOpenProject}
+        onOpenLogs={handleOpenOperationLogs}
+        onSaveProject={handleSaveProject}
       />
 
       {notice ? <section className={`banner ${notice.kind}-banner`}>{notice.text}</section> : null}
@@ -1018,6 +1292,15 @@ function App() {
         onOpenRelease={handleOpenUpdatePage}
       />
       <ErrorDialog message={errorMessage} onClose={() => setErrorMessage("")} />
+
+      <OperationLogDialog
+        open={operationLogModalOpen}
+        logs={operationLogs}
+        loading={operationLogsLoading}
+        onClose={() => setOperationLogModalOpen(false)}
+        onRefresh={refreshOperationLogs}
+        onExport={handleExportOperationLogs}
+      />
 
       <ParameterDialog
         open={parameterModalOpen}

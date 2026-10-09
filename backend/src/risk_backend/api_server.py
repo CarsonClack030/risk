@@ -17,9 +17,12 @@ from risk_backend.application import RiskBackend
 from risk_backend.logging_config import configure_logging
 
 EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PROJECT_CONTENT_TYPE = "application/x-riskproj"
+LOG_CONTENT_TYPE = "text/csv; charset=utf-8"
 IMPORT_PATHS = {"/api/workspace/import-file", "/api/workspace/import-excel"}
 MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
 MAX_IMPORT_BODY_BYTES = 25 * 1024 * 1024
+MAX_PROJECT_BODY_BYTES = 64 * 1024 * 1024
 ALLOWED_ORIGINS = {
     "tauri://localhost",
     "http://tauri.localhost",
@@ -85,6 +88,19 @@ class RequestHandler(BaseHTTPRequestHandler):
                     EXCEL_CONTENT_TYPE,
                     "污染物导入模板.xlsx",
                 )
+            elif parsed.path == "/api/project/export":
+                self._send_binary(
+                    self.backend.export_project(),
+                    PROJECT_CONTENT_TYPE,
+                    "Risk Studio 项目.riskproj",
+                )
+            elif parsed.path == "/api/operation-logs":
+                raw_limit = first_query(params, "limit")
+                self._send_json(
+                    self.backend.list_operation_logs(
+                        int(raw_limit) if raw_limit else None
+                    )
+                )
             elif parsed.path == "/api/parameters":
                 self._send_json(self.backend.list_parameters())
             elif parsed.path == "/api/results":
@@ -92,7 +108,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_not_found()
         except Exception as exc:
-            self._handle_exception(exc)
+            self._handle_exception(exc, self._operation_action("GET", parsed.path))
 
     def do_POST(self) -> None:
         try:
@@ -112,9 +128,34 @@ class RequestHandler(BaseHTTPRequestHandler):
                     )
                 )
                 return
+            if parsed.path == "/api/project/import":
+                self._send_json(
+                    self.backend.import_project(self._read_body(MAX_PROJECT_BODY_BYTES))
+                )
+                return
 
             payload = self._read_json()
-            if parsed.path == "/api/workspace/add":
+            if parsed.path == "/api/project/new":
+                self._send_json(self.backend.create_project(payload))
+            elif parsed.path == "/api/project/meta":
+                self._send_json(self.backend.update_project_metadata(payload))
+            elif parsed.path == "/api/operation-logs":
+                self.backend.record_operation(
+                    level=str(payload.get("level", "info")),
+                    action=str(payload.get("action", "界面操作")),
+                    message=str(payload.get("message", "")),
+                    details=str(payload.get("details", "")),
+                    # 兼容旧版前端：旧字段会由仓储层合并到 details。
+                    change_details=str(payload.get("change_details", "")),
+                )
+                self._send_json({"success": True})
+            elif parsed.path == "/api/operation-logs/export":
+                self._send_binary(
+                    self.backend.export_operation_logs(),
+                    LOG_CONTENT_TYPE,
+                    "Risk Studio 操作日志.csv",
+                )
+            elif parsed.path == "/api/workspace/add":
                 self._send_json(
                     self.backend.add_workspace_item(int(payload["pollutant_id"]))
                 )
@@ -153,7 +194,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_not_found()
         except Exception as exc:
-            self._handle_exception(exc)
+            self._handle_exception(exc, self._operation_action("POST", parsed.path))
 
     def do_PUT(self) -> None:
         if not self._require_api_token():
@@ -180,7 +221,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_not_found()
         except Exception as exc:
-            self._handle_exception(exc)
+            self._handle_exception(exc, self._operation_action("PUT", parsed.path))
 
     def do_DELETE(self) -> None:
         if not self._require_api_token():
@@ -203,7 +244,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_not_found()
         except Exception as exc:
-            self._handle_exception(exc)
+            self._handle_exception(exc, self._operation_action("DELETE", parsed.path))
 
     def _handle_shutdown(self) -> None:
         supplied_token = self.headers.get("X-Risk-Shutdown-Token", "")
@@ -336,7 +377,45 @@ class RequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         self._send_json({"error": message}, status=status)
 
-    def _handle_exception(self, exc: Exception) -> None:
+    @staticmethod
+    def _operation_action(method: str, path: str) -> str:
+        """给异常日志补充用户可读的操作名称。"""
+        actions = {
+            ("POST", "/api/calculate"): "风险计算",
+            ("POST", "/api/project/import"): "项目",
+            ("POST", "/api/project/new"): "项目",
+            ("POST", "/api/workspace/add"): "工作区",
+            ("POST", "/api/workspace/import-file"): "工作区导入",
+            ("POST", "/api/workspace/reset"): "工作区",
+            ("POST", "/api/parameters/reset"): "参数设置",
+            ("POST", "/api/results/export"): "文件导出",
+            ("POST", "/api/auth/login"): "管理员登录",
+            ("POST", "/api/auth/password"): "管理员设置",
+            ("POST", "/api/auth/logout"): "管理员登录",
+            ("POST", "/api/admin/pollutants"): "污染物库",
+            ("POST", "/api/operation-logs"): "操作日志",
+            ("POST", "/api/operation-logs/export"): "操作日志",
+            ("PUT", "/api/workspace/concentrations"): "浓度设置",
+            ("PUT", "/api/parameters"): "参数设置",
+            ("DELETE", "/api/workspace"): "工作区",
+        }
+        if (method, path) in actions:
+            return actions[(method, path)]
+        if path.startswith("/api/admin/pollutants/"):
+            return "污染物库"
+        if path.startswith("/api/workspace/"):
+            return "工作区"
+        return f"{method} {path}"
+
+    def _handle_exception(self, exc: Exception, action: str = "系统") -> None:
+        record_operation = getattr(self.backend, "record_operation", None)
+        if record_operation is not None:
+            record_operation(
+                level="error",
+                action=action,
+                message="操作失败",
+                details=str(exc),
+            )
         if isinstance(exc, PayloadTooLarge):
             self._send_error(str(exc), HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             return

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import threading
 import time
@@ -17,7 +18,15 @@ from risk_backend.models.entities import (
 )
 from risk_backend.repositories.auth import AuthRepository
 from risk_backend.repositories.catalog import CatalogRepository
-from risk_backend.repositories.database import RUNTIME_DB, ensure_database
+from risk_backend.repositories.database import (
+    RUNTIME_DB,
+    ensure_database,
+    export_project_database,
+    read_project_metadata,
+    replace_runtime_database,
+    write_project_metadata,
+)
+from risk_backend.repositories.operation_logs import OperationLogRepository
 from risk_backend.repositories.parameters import (
     PARAMETER_GROUPS,
     PARAMETER_NAMES,
@@ -67,6 +76,14 @@ POLLUTANT_DECIMAL_FIELDS = {
 ADMIN_SESSION_SECONDS = 8 * 60 * 60
 MAX_WORKSPACE_ITEMS = 10_000
 MAX_TEXT_FIELD_LENGTH = 256
+LOGGER = logging.getLogger("risk_backend.application")
+
+PARAMETER_VALUE_COLUMNS = (
+    ("data_gi", "国家标准·第一类用地"),
+    ("data_gii", "国家标准·第二类用地"),
+    ("data_zi", "浙江标准·第一类用地"),
+    ("data_zii", "浙江标准·第二类用地"),
+)
 
 
 class RiskBackend:
@@ -78,6 +95,7 @@ class RiskBackend:
         self.workspace_repository = WorkspaceRepository()
         self.parameter_repository = ParameterRepository()
         self.result_repository = ResultRepository()
+        self.operation_log_repository = OperationLogRepository()
         self.auth_repository = AuthRepository()
         self.calculator = RiskCalculator(self.parameter_repository)
         self.workspace_importer = WorkspaceImporter(
@@ -93,7 +111,44 @@ class RiskBackend:
             "database": str(RUNTIME_DB),
             "catalog_count": self.catalog_repository.count_pollutants(),
             "workspace_count": self.workspace_repository.count_selected_pollutants(),
+            "project": read_project_metadata(),
         }
+
+    def record_operation(
+        self,
+        *,
+        level: str,
+        action: str,
+        message: str,
+        details: str = "",
+        change_details: str = "",
+    ) -> None:
+        """写入日志，但不让日志故障反过来阻断业务操作。"""
+        # 某些单元测试会用 __new__ 构造一个只测试计算事务的精简对象，
+        # 这类对象没有初始化日志仓库时应继续保持原有测试行为。
+        if not hasattr(self, "operation_log_repository"):
+            return
+        try:
+            self.operation_log_repository.append(
+                level=level,
+                action=action,
+                message=message,
+                details=details,
+                change_details=change_details,
+            )
+        except Exception:
+            LOGGER.exception("Failed to write operation log")
+
+    def list_operation_logs(self, limit: int | None = None) -> dict[str, object]:
+        return {"items": self.operation_log_repository.list_recent(limit)}
+
+    def export_operation_logs(self) -> bytes:
+        self.record_operation(
+            level="info",
+            action="操作日志",
+            message="导出了操作日志",
+        )
+        return self.operation_log_repository.export_csv()
 
     def list_catalog(self, keyword: str) -> dict[str, object]:
         rows = self.catalog_repository.list_pollutants(keyword)
@@ -120,6 +175,12 @@ class RiskBackend:
             groundwater_protection_concentration=Decimal("0"),
         )
         item = SelectedPollutant(workspace_number, pollutant, concentration)
+        self.record_operation(
+            level="info",
+            action="工作区",
+            message=f"添加污染物：{pollutant.name}",
+            details=f"工作区序号：{workspace_number}，污染物编号：{pollutant.id}",
+        )
         return {
             "item": serialize_selected(item),
             "added_workspace_number": workspace_number,
@@ -133,21 +194,43 @@ class RiskBackend:
         filename: str = "",
         content_type: str = "",
     ) -> dict[str, object]:
-        return self.workspace_importer.import_file(
+        result = self.workspace_importer.import_file(
             content,
             filename=filename,
             content_type=content_type,
         )
+        self.record_operation(
+            level="info",
+            action="工作区导入",
+            message=f"从 {filename or '文件'} 导入污染物",
+            details=f"导入数量：{result.get('imported', len(result.get('items', [])))}",
+        )
+        return result
 
     def export_workspace_import_template(self) -> bytes:
+        self.record_operation(
+            level="info",
+            action="文件导出",
+            message="导出了污染物导入模板",
+        )
         return self.workspace_importer.build_template()
 
     def remove_workspace_item(self, workspace_number: int) -> dict[str, object]:
         self.workspace_repository.remove_workspace_row(workspace_number)
+        self.record_operation(
+            level="info",
+            action="工作区",
+            message=f"移除了工作区序号：{workspace_number}",
+        )
         return self.list_workspace()
 
     def reset_workspace(self) -> dict[str, object]:
         self.workspace_repository.clear_workspace()
+        self.record_operation(
+            level="info",
+            action="工作区",
+            message="重置了工作区",
+        )
         return self.list_workspace()
 
     def update_concentrations(
@@ -197,6 +280,12 @@ class RiskBackend:
                 )
             )
         self.workspace_repository.update_concentrations(items)
+        self.record_operation(
+            level="info",
+            action="浓度设置",
+            message="更新了污染物浓度",
+            details=f"更新数量：{len(items)}",
+        )
         return self.list_workspace()
 
     def list_parameters(self) -> dict[str, object]:
@@ -211,7 +300,16 @@ class RiskBackend:
         }
 
     def reset_parameters(self) -> dict[str, object]:
+        before = self._parameter_snapshot()
         self.parameter_repository.reset_defaults()
+        after = self._parameter_snapshot()
+        changed = self._record_parameter_changes(before, after, "恢复默认")
+        if not changed:
+            self.record_operation(
+                level="info",
+                action="参数设置",
+                message="恢复了默认参数（没有数值变化）",
+            )
         return self.list_parameters()
 
     def save_parameters(self, groups: list[dict[str, object]]) -> dict[str, object]:
@@ -270,12 +368,62 @@ class RiskBackend:
                 values[row.name] = getattr(row, attribute_name)
             self.calculator.validate_parameters(selection, values)
 
+        before = self._parameter_snapshot()
         rows_by_group: dict[int, list[ParameterRow]] = {}
         for row in parsed_rows:
             rows_by_group.setdefault(row.group_id, []).append(row)
         for rows in rows_by_group.values():
             self.parameter_repository.save_group_rows(rows)
+        after = self._parameter_snapshot()
+        changed = self._record_parameter_changes(before, after, "保存参数")
+        if not changed:
+            self.record_operation(
+                level="info",
+                action="参数设置",
+                message="保存了风险评估参数（没有数值变化）",
+                details=f"检查参数数量：{len(parsed_rows)}",
+            )
         return self.list_parameters()
+
+    def _parameter_snapshot(self) -> dict[tuple[int, str], ParameterRow]:
+        """读取当前参数值，供保存前后做精确差异比较。"""
+        return {
+            (group_id, row.name): row
+            for group_id in PARAMETER_GROUPS
+            for row in self.parameter_repository.list_group_rows(group_id)
+        }
+
+    def _record_parameter_changes(
+        self,
+        before: dict[tuple[int, str], ParameterRow],
+        after: dict[tuple[int, str], ParameterRow],
+        operation: str,
+    ) -> int:
+        """把参数保存前后的每个数值变化写成一条独立日志。"""
+        changed_count = 0
+        for key in sorted(set(before) & set(after)):
+            old_row = before[key]
+            new_row = after[key]
+            for column_name, selection_label in PARAMETER_VALUE_COLUMNS:
+                old_value = getattr(old_row, column_name)
+                new_value = getattr(new_row, column_name)
+                if old_value == new_value:
+                    continue
+                changed_count += 1
+                change_details = (
+                    f"参数：{new_row.label}（{new_row.name}）；"
+                    f"分组：{PARAMETER_GROUPS[new_row.group_id]}；"
+                    f"单位：{new_row.unit or '无'}；"
+                    f"适用范围：{selection_label}；"
+                    f"原值：{old_value}；新值：{new_value}"
+                )
+                self.record_operation(
+                    level="info",
+                    action="参数设置",
+                    message=f"{operation}：{new_row.label}",
+                    details=change_details,
+                )
+        return changed_count
 
     def calculate(self, payload: dict[str, object]) -> dict[str, object]:
         selected = self.workspace_repository.list_selected_pollutants()
@@ -294,15 +442,112 @@ class RiskBackend:
             area_type=str(payload.get("area_type", "I")),
         )
         self.calculator.validate_selection(selection)
-        results = self.calculator.calculate(selection, selected, pathways)
+        try:
+            results = self.calculator.calculate(selection, selected, pathways)
+        except Exception as error:
+            self.record_operation(
+                level="error",
+                action="风险计算",
+                message="风险计算失败",
+                details=str(error),
+            )
+            raise
         self.result_repository.replace_results(results)
+        self.record_operation(
+            level="info",
+            action="风险计算",
+            message="风险计算完成",
+            details=(
+                f"标准：{selection.standard}，用地类型：{selection.area_type}，"
+                f"暴露途径数量：{sum(pathways.values())}"
+            ),
+        )
         return {"tables": serialize_results(self.result_repository)}
 
     def list_results(self) -> dict[str, object]:
         return {"tables": serialize_results(self.result_repository)}
 
     def export_results(self) -> bytes:
+        self.record_operation(
+            level="info",
+            action="文件导出",
+            message="导出了风险评估结果",
+        )
         return build_xlsx(build_export_rows(self.result_repository))
+
+    def export_project(self) -> bytes:
+        """Export the complete assessment state as a portable project file."""
+        return export_project_database()
+
+    def import_project(self, content: bytes) -> dict[str, object]:
+        """Validate and open a previously saved project database."""
+        replace_runtime_database(content)
+        self.record_operation(
+            level="info",
+            action="项目",
+            message="打开了项目文件",
+        )
+        return self.health()
+
+    def update_project_metadata(self, payload: dict[str, object]) -> dict[str, object]:
+        """Save project name and calculation selections beside the assessment data."""
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            raise ValueError("项目名称不能为空")
+        if len(name) > MAX_TEXT_FIELD_LENGTH:
+            raise ValueError(f"项目名称不能超过 {MAX_TEXT_FIELD_LENGTH} 个字符")
+
+        standard = str(payload.get("standard", "G"))
+        area_type = str(payload.get("area_type", "I"))
+        if standard not in {"G", "Z"}:
+            raise ValueError("适用标准参数无效")
+        if area_type not in {"I", "II"}:
+            raise ValueError("用地类型参数无效")
+        raw_pathways = payload.get("pathways")
+        if not isinstance(raw_pathways, dict):
+            raise ValueError("暴露途径参数必须是对象")
+
+        previous = read_project_metadata()
+        project = write_project_metadata(
+            name=name,
+            standard=standard,
+            area_type=area_type,
+            pathways={key: raw_pathways.get(key) is True for key in PATHWAY_KEYS},
+        )
+        changed_fields = [
+            field
+            for field in ("name", "standard", "area_type", "pathways")
+            if previous.get(field) != project.get(field)
+        ]
+        if changed_fields:
+            self.record_operation(
+                level="info",
+                action="项目设置",
+                message="更新了项目名称或评估条件",
+                details=f"变更字段：{'、'.join(changed_fields)}",
+            )
+        return {"project": project}
+
+    def create_project(
+        self, payload: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        """Start a clean assessment without deleting the pollutant library.
+
+        A new project must not inherit mutable assessment state from the previous
+        project.  The catalog remains shared, while the workspace, calculated
+        results, and temporary parameter edits all return to their defaults.
+        """
+        self.workspace_repository.clear_workspace()
+        self.parameter_repository.reset_defaults()
+        self.update_project_metadata(payload or {})
+        self.operation_log_repository.clear()
+        self.record_operation(
+            level="info",
+            action="项目",
+            message="新建了项目",
+            details=str(payload.get("name", "")) if payload else "",
+        )
+        return self.health()
 
     def login(self, payload: dict[str, object]) -> dict[str, object]:
         username = str(payload.get("username", "")).strip()
@@ -316,6 +561,11 @@ class RiskBackend:
             raise ValueError(f"用户名和密码长度不能超过 {MAX_TEXT_FIELD_LENGTH} 个字符")
         success = self.auth_repository.validate(username, password)
         if not success:
+            self.record_operation(
+                level="warning",
+                action="管理员登录",
+                message=f"管理员登录失败：{username}",
+            )
             return {"success": False, "username": "", "token": ""}
         token = secrets.token_urlsafe(32)
         with self._session_lock:
@@ -324,6 +574,11 @@ class RiskBackend:
                 username,
                 time.monotonic() + ADMIN_SESSION_SECONDS,
             )
+        self.record_operation(
+            level="info",
+            action="管理员登录",
+            message=f"管理员登录成功：{username}",
+        )
         return {"success": True, "username": username, "token": token}
 
     def validate_admin_session(self, token: str) -> str | None:
@@ -337,6 +592,11 @@ class RiskBackend:
     def logout(self, token: str) -> dict[str, object]:
         with self._session_lock:
             self._admin_sessions.pop(token, None)
+        self.record_operation(
+            level="info",
+            action="管理员登录",
+            message="管理员退出登录",
+        )
         return {"success": True}
 
     def update_password(
@@ -361,6 +621,11 @@ class RiskBackend:
         if success:
             with self._session_lock:
                 self._admin_sessions.clear()
+            self.record_operation(
+                level="info",
+                action="管理员设置",
+                message=f"管理员 {username} 修改了密码",
+            )
         return {"success": success}
 
     def _remove_expired_sessions(self) -> None:
@@ -376,6 +641,11 @@ class RiskBackend:
     def add_pollutant(self, payload: dict[str, object]) -> dict[str, object]:
         pollutant = self._build_pollutant(payload)
         self.catalog_repository.add_pollutant(pollutant)
+        self.record_operation(
+            level="info",
+            action="污染物库",
+            message=f"新增污染物：{pollutant.name}",
+        )
         return self.list_catalog(str(payload.get("keyword", "")))
 
     def update_pollutant(
@@ -389,6 +659,12 @@ class RiskBackend:
             raise ValueError("该污染物已在工作区中使用，请先移除工作区记录")
         pollutant = self._build_pollutant(payload, pollutant_id)
         self.catalog_repository.update_pollutant(pollutant)
+        self.record_operation(
+            level="info",
+            action="污染物库",
+            message=f"更新污染物：{pollutant.name}",
+            details=f"污染物编号：{pollutant.id}",
+        )
         return self.list_catalog(str(payload.get("keyword", "")))
 
     def delete_pollutant(self, pollutant_id: int, keyword: str) -> dict[str, object]:
@@ -397,6 +673,11 @@ class RiskBackend:
         if self.catalog_repository.count_workspace_references(pollutant_id):
             raise ValueError("该污染物已在工作区中使用，请先移除工作区记录")
         self.catalog_repository.delete_pollutant(pollutant_id)
+        self.record_operation(
+            level="info",
+            action="污染物库",
+            message=f"删除了污染物编号：{pollutant_id}",
+        )
         return self.list_catalog(keyword)
 
     def _build_pollutant(

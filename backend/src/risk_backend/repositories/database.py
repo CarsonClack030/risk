@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
+import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -31,9 +34,38 @@ WORKSPACE_TABLES = (
     "db_phq",
     "db_cv",
 )
-DATABASE_SCHEMA_VERSION = 1
+PROJECT_TABLES = frozenset(
+    {
+        "db_users",
+        "db_pol",
+        "db_pol_area_par",
+        "db_pol_area_par_temp",
+        "db_pol_temp",
+        "db_pol_con",
+        *WORKSPACE_TABLES,
+    }
+)
+PROJECT_METADATA_TABLE = "risk_project_meta"
+OPERATION_LOG_TABLE = "risk_operation_logs"
+PROJECT_PATHWAY_KEYS = (
+    "ois",
+    "dcs",
+    "pis",
+    "dgw",
+    "cgw",
+    "iov3",
+    "iiv2",
+    "iov1",
+    "iov2",
+    "iiv1",
+)
+DATABASE_SCHEMA_VERSION = 4
 MAX_DATABASE_BACKUPS = 3
+MAX_PROJECT_BYTES = 64 * 1024 * 1024
 _DATABASE_LOCK = threading.Lock()
+KNOWN_UNUSED_PAGE_WARNING = re.compile(
+    r"^\*\*\* in database main \*\*\*\n(?:Page \d+: never used\n?)+$"
+)
 
 
 def application_data_dir() -> Path:
@@ -141,6 +173,49 @@ def _migrate_database(database_path: Path, *, existing_database: bool) -> None:
                         "update db_users set password = ? where id = ?",
                         (hash_password(password), user_id),
                     )
+        if current_version < 2:
+            connection.execute(
+                f"""
+                create table if not exists {PROJECT_METADATA_TABLE} (
+                    key text primary key,
+                    value text not null
+                )
+                """
+            )
+        if current_version < 3:
+            connection.execute(
+                f"""
+                create table if not exists {OPERATION_LOG_TABLE} (
+                    id integer primary key autoincrement,
+                    timestamp text not null,
+                    level text not null,
+                    action text not null,
+                    message text not null,
+                    details text not null default '',
+                    change_details text not null default ''
+                )
+                """
+            )
+            connection.execute(
+                f"""
+                create index if not exists idx_{OPERATION_LOG_TABLE}_timestamp
+                on {OPERATION_LOG_TABLE} (timestamp desc, id desc)
+                """
+            )
+        if current_version < 4:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    f"pragma table_info({OPERATION_LOG_TABLE})"
+                ).fetchall()
+            }
+            if "change_details" not in columns:
+                connection.execute(
+                    f"""
+                    alter table {OPERATION_LOG_TABLE}
+                    add column change_details text not null default ''
+                    """
+                )
         connection.execute(f"pragma user_version = {DATABASE_SCHEMA_VERSION}")
 
 
@@ -162,6 +237,142 @@ def ensure_database() -> Path:
         with suppress(OSError):
             RUNTIME_DB.chmod(0o600)
     return RUNTIME_DB
+
+
+def export_project_database() -> bytes:
+    """Export a consistent SQLite snapshot for a `.riskproj` file."""
+    ensure_database()
+    with (
+        _DATABASE_LOCK,
+        tempfile.NamedTemporaryFile(
+            prefix="risk-project-", suffix=".db", dir=APP_DIR
+        ) as snapshot,
+    ):
+        with (
+            sqlite3.connect(RUNTIME_DB) as source,
+            sqlite3.connect(snapshot.name) as target,
+        ):
+            source.backup(target)
+        snapshot.seek(0)
+        return snapshot.read()
+
+
+def read_project_metadata() -> dict[str, object]:
+    """Read the project identity and calculation selections from the database."""
+    defaults: dict[str, object] = {
+        "name": "",
+        "standard": "G",
+        "area_type": "I",
+        "pathways": {key: False for key in PROJECT_PATHWAY_KEYS},
+    }
+    with connect() as connection:
+        rows = connection.execute(
+            f"select key, value from {PROJECT_METADATA_TABLE}"
+        ).fetchall()
+    values = {str(row["key"]): str(row["value"]) for row in rows}
+    defaults["name"] = values.get("name", "")
+    defaults["standard"] = values.get("standard", "G")
+    defaults["area_type"] = values.get("area_type", "I")
+    try:
+        stored_pathways = json.loads(values.get("pathways", "{}"))
+    except json.JSONDecodeError:
+        stored_pathways = {}
+    if isinstance(stored_pathways, dict):
+        defaults["pathways"] = {
+            key: stored_pathways.get(key) is True for key in PROJECT_PATHWAY_KEYS
+        }
+    return defaults
+
+
+def write_project_metadata(
+    *,
+    name: str,
+    standard: str,
+    area_type: str,
+    pathways: dict[str, bool],
+) -> dict[str, object]:
+    """Persist project metadata in the same SQLite file as assessment data."""
+    normalized_pathways = {
+        key: pathways.get(key) is True for key in PROJECT_PATHWAY_KEYS
+    }
+    values = {
+        "name": name,
+        "standard": standard,
+        "area_type": area_type,
+        "pathways": json.dumps(normalized_pathways, ensure_ascii=False),
+    }
+    with connect() as connection:
+        for key, value in values.items():
+            connection.execute(
+                f"""
+                insert into {PROJECT_METADATA_TABLE} (key, value)
+                values (?, ?)
+                on conflict(key) do update set value = excluded.value
+                """,
+                (key, value),
+            )
+    return read_project_metadata()
+
+
+def _validate_project_database(database_path: Path) -> None:
+    """Validate an imported project before it can replace the runtime database."""
+    try:
+        with sqlite3.connect(database_path) as connection:
+            integrity = str(connection.execute("pragma integrity_check").fetchone()[0])
+            if integrity != "ok" and not KNOWN_UNUSED_PAGE_WARNING.fullmatch(integrity):
+                raise ValueError("项目文件数据库校验失败，文件可能已经损坏")
+            version = int(connection.execute("pragma user_version").fetchone()[0])
+            if version > DATABASE_SCHEMA_VERSION:
+                raise ValueError(
+                    f"项目文件版本 {version} 高于当前软件支持的版本 "
+                    f"{DATABASE_SCHEMA_VERSION}"
+                )
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "select name from sqlite_master where type = 'table'"
+                )
+            }
+    except sqlite3.DatabaseError as error:
+        raise ValueError("项目文件数据库校验失败，文件可能已经损坏") from error
+    missing = sorted(PROJECT_TABLES - tables)
+    if missing:
+        missing_text = "、".join(missing[:5])
+        raise ValueError(f"项目文件缺少必要的数据表：{missing_text}")
+
+
+def replace_runtime_database(project_bytes: bytes) -> None:
+    """Atomically replace the runtime database with a validated project file."""
+    if not project_bytes:
+        raise ValueError("项目文件为空")
+    if len(project_bytes) > MAX_PROJECT_BYTES:
+        raise ValueError(f"项目文件不能超过 {MAX_PROJECT_BYTES // (1024 * 1024)} MB")
+
+    ensure_database()
+    temporary_path: Path | None = None
+    try:
+        with _DATABASE_LOCK:
+            with tempfile.NamedTemporaryFile(
+                prefix="risk-project-import-",
+                suffix=".db",
+                dir=APP_DIR,
+                delete=False,
+            ) as temporary:
+                temporary.write(project_bytes)
+                temporary.flush()
+                temporary_path = Path(temporary.name)
+            temporary_path.chmod(0o600)
+            _validate_project_database(temporary_path)
+            _migrate_database(temporary_path, existing_database=False)
+            _backup_database(RUNTIME_DB)
+            os.replace(temporary_path, RUNTIME_DB)
+            temporary_path = None
+            with suppress(OSError):
+                RUNTIME_DB.chmod(0o600)
+    finally:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink()
 
 
 @contextmanager

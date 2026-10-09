@@ -12,6 +12,9 @@ backend/build
 # Runtime data generated on the local machine
 .runtime_data
 
+# Local analysis outputs and temporary comparison artifacts
+outputs/
+
 # Python cache files
 __pycache__/
 *.py[cod]

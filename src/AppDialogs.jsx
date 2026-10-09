@@ -68,6 +68,96 @@ export function ErrorDialog({ message, onClose }) {
   );
 }
 
+export function OperationLogDialog({
+  open,
+  logs,
+  loading,
+  onClose,
+  onRefresh,
+  onExport,
+}) {
+  if (!open) return null;
+
+  function formatTimestamp(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value || "—";
+    }
+    return date.toLocaleString("zh-CN", {
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  const levelLabels = { info: "信息", warning: "警告", error: "错误" };
+  return (
+    <Modal
+      title="操作日志"
+      subtitle="项目内保存所有关键操作和错误信息，时间按本机时区显示。"
+      size="xl"
+      onClose={onClose}
+      actions={
+        <>
+          <button className="ghost-button" disabled={loading} onClick={onRefresh} type="button">
+            {loading ? "刷新中..." : "刷新日志"}
+          </button>
+          <button className="ghost-button" onClick={onExport} type="button">
+            导出 CSV
+          </button>
+          <button className="primary-button" onClick={onClose} type="button">
+            完成
+          </button>
+        </>
+      }
+    >
+      <div className="operation-log-summary">
+        共记录 {logs.length} 条（最新记录在上方）
+      </div>
+      <div className="operation-log-table-wrap">
+        <table className="operation-log-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>级别</th>
+              <th>操作</th>
+              <th>消息</th>
+              <th>详细信息</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.length === 0 ? (
+              <tr>
+                <td className="empty-cell" colSpan="5">
+                  暂无操作日志
+                </td>
+              </tr>
+            ) : (
+              logs.map((log) => (
+                <tr key={log.id}>
+                  <td className="operation-log-time">{formatTimestamp(log.timestamp)}</td>
+                  <td>
+                    <span className={`operation-log-level level-${log.level}`}>
+                      {levelLabels[log.level] || log.level}
+                    </span>
+                  </td>
+                  <td>{log.action || "—"}</td>
+                  <td>{log.message || "—"}</td>
+                  <td className="operation-log-details">{log.details || "—"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  );
+}
+
 export function ParameterDialog({
   open,
   groups,

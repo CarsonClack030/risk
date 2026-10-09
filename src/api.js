@@ -176,6 +176,28 @@ export const api = {
   listCatalog: (keyword = "") => request(`/api/catalog${qs({ keyword })}`),
   listWorkspace: () => request("/api/workspace"),
   downloadWorkspaceImportTemplate: () => request("/api/workspace/import-template"),
+  exportProject: () =>
+    request("/api/project/export", {
+      method: "GET",
+    }),
+  importProject: (filename, content) =>
+    request(`/api/project/import${qs({ filename })}`, {
+      method: "POST",
+      body: content,
+      headers: {
+        "Content-Type": "application/x-riskproj",
+      },
+    }),
+  createProject: (project) =>
+    request("/api/project/new", {
+      method: "POST",
+      body: JSON.stringify(project),
+    }),
+  updateProjectMetadata: (project) =>
+    request("/api/project/meta", {
+      method: "POST",
+      body: JSON.stringify(project),
+    }),
   addWorkspaceItem: (pollutantId) =>
     request("/api/workspace/add", {
       method: "POST",
@@ -216,6 +238,18 @@ export const api = {
     request("/api/results/export", {
       method: "POST",
       body: "{}",
+    }),
+  listOperationLogs: (limit) =>
+    request(`/api/operation-logs${qs({ limit })}`),
+  exportOperationLogs: () =>
+    request("/api/operation-logs/export", {
+      method: "POST",
+      body: "{}",
+    }),
+  recordOperation: (payload) =>
+    request("/api/operation-logs", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   login: (username, password) =>
     request("/api/auth/login", {

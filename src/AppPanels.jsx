@@ -14,18 +14,162 @@ export function SplashScreen() {
   );
 }
 
+export function ProjectStartScreen({
+  version,
+  busy,
+  createOpen,
+  projectName,
+  projectPath,
+  onOpenProject,
+  onCreateProject,
+  onProjectNameChange,
+  onChooseProjectPath,
+  onCancelCreate,
+  onConfirmCreate,
+}) {
+  return (
+    <div className="project-start-screen">
+      <div className="project-start-glow project-start-glow-one" />
+      <div className="project-start-glow project-start-glow-two" />
+      <section className="project-start-card">
+        <div className="project-start-brand">
+          <span>Risk Studio</span>
+          <small>v{version}</small>
+        </div>
+        <h1>污染场地风险评估系统</h1>
+        <p className="project-start-lead">选择一个开始方式，进入你的风险评估工作区。</p>
+        <div className="project-start-options">
+          <button
+            className="project-option project-option-primary"
+            disabled={busy}
+            onClick={onOpenProject}
+            type="button"
+          >
+            <span className="project-option-icon">↗</span>
+            <span>
+              <strong>打开已有项目</strong>
+              <small>选择 .riskproj 项目文件，继续之前的评估工作</small>
+            </span>
+          </button>
+          <button
+            className="project-option"
+            disabled={busy}
+            onClick={onCreateProject}
+            type="button"
+          >
+            <span className="project-option-icon">＋</span>
+            <span>
+              <strong>新建项目</strong>
+              <small>创建一个空白工作区，污染物库和参数设置会保留</small>
+            </span>
+          </button>
+        </div>
+        {busy ? <p className="project-start-status">正在准备项目，请稍候...</p> : null}
+        <p className="project-start-tip">选择已有项目文件即可恢复之前的评估工作。</p>
+      </section>
+      {createOpen ? (
+        <div className="project-create-overlay" role="presentation">
+          <section
+            aria-labelledby="project-create-title"
+            aria-modal="true"
+            className="project-create-dialog"
+            role="dialog"
+          >
+            <div className="project-create-heading">
+              <div>
+                <span className="eyebrow">新建项目</span>
+                <h2 id="project-create-title">创建一个风险评估项目</h2>
+              </div>
+              <button
+                aria-label="取消新建项目"
+                className="icon-button"
+                onClick={onCancelCreate}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <label className="field-label" htmlFor="new-project-name">
+              项目名称
+            </label>
+            <input
+              autoFocus
+              id="new-project-name"
+              maxLength={120}
+              onChange={(event) => onProjectNameChange(event.target.value)}
+              placeholder="例如：某地块风险评估"
+              value={projectName}
+            />
+            <label className="field-label" htmlFor="new-project-path">
+              项目文件保存位置
+            </label>
+            <div className="project-path-picker">
+              <input
+                aria-readonly="true"
+                id="new-project-path"
+                placeholder="请点击右侧按钮选择保存位置"
+                readOnly
+                value={projectPath}
+              />
+              <button
+                className="ghost-button"
+                disabled={!projectName.trim() || busy}
+                onClick={onChooseProjectPath}
+                type="button"
+              >
+                选择位置
+              </button>
+            </div>
+            <p className="project-create-hint">
+              项目名称、工作区污染物、浓度、标准、暴露途径和参数都会自动保存到该文件。
+            </p>
+            <div className="project-create-actions">
+              <button className="ghost-button" onClick={onCancelCreate} type="button">
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={busy || !projectName.trim() || !projectPath}
+                onClick={onConfirmCreate}
+                type="button"
+              >
+                {busy ? "创建中..." : "创建项目"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AppHeader({
   version,
+  projectName,
+  projectSaveState,
   checkingUpdate,
   onCheckUpdate,
   onOpenParameters,
   onOpenAdmin,
   onOpenResults,
+  onOpenProject,
+  onOpenLogs,
+  onSaveProject,
 }) {
   return (
     <header className="hero-panel">
       <div className="hero-title-row">
-        <h1>污染场地风险评估系统</h1>
+        <div>
+          <h1>污染场地风险评估系统</h1>
+          <span className="project-name-label">
+            项目：{projectName || "未命名项目"} ·{" "}
+            {projectSaveState === "saving"
+              ? "自动保存中"
+              : projectSaveState === "error"
+                ? "自动保存失败"
+                : "已自动保存"}
+          </span>
+        </div>
         <span className="version-badge" title="当前软件版本">
           v{version}
         </span>
@@ -44,6 +188,15 @@ export function AppHeader({
         </button>
         <button className="ghost-button" onClick={onOpenAdmin} type="button">
           污染物数据库
+        </button>
+        <button className="ghost-button" onClick={onOpenProject} type="button">
+          打开项目
+        </button>
+        <button className="ghost-button" onClick={onOpenLogs} type="button">
+          操作日志
+        </button>
+        <button className="ghost-button" onClick={onSaveProject} type="button">
+          保存项目
         </button>
         <button className="primary-button" onClick={onOpenResults} type="button">
           查看结果
