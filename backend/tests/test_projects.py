@@ -124,6 +124,7 @@ class ProjectDatabaseTests(unittest.TestCase):
                 logs = repository.list_recent()
                 csv_data = repository.export_csv()
                 snapshot = database.export_project_database()
+                self.assertFalse(list(Path(directory).glob("risk-project-*.db")))
 
             self.assertEqual(len(logs), 1)
             self.assertEqual(logs[0]["level"], "error")

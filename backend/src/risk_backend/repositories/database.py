@@ -292,19 +292,29 @@ def ensure_database() -> Path:
 def export_project_database() -> bytes:
     """Export a consistent SQLite snapshot for a `.riskproj` file."""
     ensure_database()
-    with (
-        _DATABASE_LOCK,
-        tempfile.NamedTemporaryFile(
+    snapshot_path: Path | None = None
+    try:
+        # NamedTemporaryFile keeps the file handle open while the context is
+        # active. Windows then refuses to let SQLite open the same path again.
+        # mkstemp gives us a unique path; close its descriptor before SQLite
+        # opens the destination database.
+        file_descriptor, file_name = tempfile.mkstemp(
             prefix="risk-project-", suffix=".db", dir=APP_DIR
-        ) as snapshot,
-    ):
-        with (
-            sqlite3.connect(RUNTIME_DB) as source,
-            sqlite3.connect(snapshot.name) as target,
-        ):
-            source.backup(target)
-        snapshot.seek(0)
-        return snapshot.read()
+        )
+        os.close(file_descriptor)
+        snapshot_path = Path(file_name)
+        with _DATABASE_LOCK:
+            with (
+                sqlite3.connect(RUNTIME_DB) as source,
+                sqlite3.connect(snapshot_path) as target,
+            ):
+                source.backup(target)
+            return snapshot_path.read_bytes()
+    finally:
+        if snapshot_path is not None:
+            _remove_database_sidecars(snapshot_path)
+            with suppress(OSError):
+                snapshot_path.unlink()
 
 
 def read_project_metadata() -> dict[str, object]:
