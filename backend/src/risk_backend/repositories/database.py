@@ -150,15 +150,22 @@ def _backup_database(database_path: Path) -> Path:
 
 def _checkpoint_database(database_path: Path) -> None:
     """Flush SQLite WAL pages before copying or replacing a database file."""
-    with sqlite3.connect(database_path) as connection:
+    connection = sqlite3.connect(database_path, timeout=5)
+    try:
         connection.execute("pragma wal_checkpoint(truncate)")
+    finally:
+        connection.close()
 
 
 def _prepare_imported_database(database_path: Path) -> None:
     """Make an imported database safe to swap without carrying WAL sidecars."""
-    _checkpoint_database(database_path)
-    with sqlite3.connect(database_path) as connection:
+    connection = sqlite3.connect(database_path, timeout=5)
+    try:
+        connection.execute("pragma busy_timeout=5000")
+        connection.execute("pragma wal_checkpoint(truncate)")
         connection.execute("pragma journal_mode=delete")
+    finally:
+        connection.close()
 
 
 def _remove_database_sidecars(database_path: Path) -> None:
