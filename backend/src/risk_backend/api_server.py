@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 from risk_backend.application import RiskBackend
-from risk_backend.logging_config import configure_logging
+from risk_backend.logging_config import configure_logging, configured_log_path
 
 EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PROJECT_CONTENT_TYPE = "application/x-riskproj"
@@ -428,9 +428,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_error(message, HTTPStatus.BAD_REQUEST)
             return
         LOGGER.exception("Unhandled backend request error")
-        self._send_error(
-            "后端处理失败，请查看运行日志", HTTPStatus.INTERNAL_SERVER_ERROR
-        )
+        detail = str(exc).strip()
+        if len(detail) > 300:
+            detail = f"{detail[:297]}..."
+        message = "后端处理失败"
+        if detail:
+            message += f"：{detail}"
+        message += f"；诊断日志：{configured_log_path()}"
+        self._send_error(message, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _origin_is_allowed(self) -> bool:
         origin = self.headers.get("Origin", "")

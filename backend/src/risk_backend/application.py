@@ -104,6 +104,10 @@ class RiskBackend:
         )
         self._admin_sessions: dict[str, tuple[str, float]] = {}
         self._session_lock = threading.Lock()
+        # 新建项目会同时清空工作区、恢复参数并重置日志。
+        # Windows 下用户快速双击按钮时，两个请求并发写 SQLite 容易触发锁错误，
+        # 因此把整个项目切换过程串行化。
+        self._project_lock = threading.Lock()
 
     def health(self) -> dict[str, object]:
         return {
@@ -537,17 +541,23 @@ class RiskBackend:
         project.  The catalog remains shared, while the workspace, calculated
         results, and temporary parameter edits all return to their defaults.
         """
-        self.workspace_repository.clear_workspace()
-        self.parameter_repository.reset_defaults()
-        self.update_project_metadata(payload or {})
-        self.operation_log_repository.clear()
-        self.record_operation(
-            level="info",
-            action="项目",
-            message="新建了项目",
-            details=str(payload.get("name", "")) if payload else "",
-        )
-        return self.health()
+        # 保持对旧测试/插件中通过 __new__ 创建的精简对象兼容。
+        project_lock = getattr(self, "_project_lock", None)
+        if project_lock is None:
+            project_lock = threading.Lock()
+            self._project_lock = project_lock
+        with project_lock:
+            self.workspace_repository.clear_workspace()
+            self.parameter_repository.reset_defaults()
+            self.update_project_metadata(payload or {})
+            self.operation_log_repository.clear()
+            self.record_operation(
+                level="info",
+                action="项目",
+                message="新建了项目",
+                details=str(payload.get("name", "")) if payload else "",
+            )
+            return self.health()
 
     def login(self, payload: dict[str, object]) -> dict[str, object]:
         username = str(payload.get("username", "")).strip()

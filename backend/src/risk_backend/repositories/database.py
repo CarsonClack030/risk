@@ -208,9 +208,9 @@ def _migrate_database(database_path: Path, *, existing_database: bool) -> None:
             f"运行数据库版本 {current_version} 高于软件支持的版本 "
             f"{DATABASE_SCHEMA_VERSION}，请升级软件后再试"
         )
-    if current_version == DATABASE_SCHEMA_VERSION:
-        return
-    if existing_database:
+    # 旧版已经写入当前版本号但缺少附加表时，直接补表即可；
+    # 只有真正发生版本迁移时才创建一次用户数据库备份，避免每次启动都产生备份文件。
+    if existing_database and current_version < DATABASE_SCHEMA_VERSION:
         _backup_database(database_path)
 
     with sqlite3.connect(database_path) as connection:
@@ -223,49 +223,49 @@ def _migrate_database(database_path: Path, *, existing_database: bool) -> None:
                         "update db_users set password = ? where id = ?",
                         (hash_password(password), user_id),
                     )
-        if current_version < 2:
+        # 不只依赖 user_version。部分旧版数据库曾经把版本号写完，
+        # 但在创建表前被中断，导致“版本号正确、表却不存在”。
+        # 每次启动都用 IF NOT EXISTS 做一次轻量结构自检，避免新建项目时才暴露问题。
+        connection.execute(
+            f"""
+            create table if not exists {PROJECT_METADATA_TABLE} (
+                key text primary key,
+                value text not null
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            create table if not exists {OPERATION_LOG_TABLE} (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                level text not null,
+                action text not null,
+                message text not null,
+                details text not null default '',
+                change_details text not null default ''
+            )
+            """
+        )
+        columns = {
+            row[1]
+            for row in connection.execute(
+                f"pragma table_info({OPERATION_LOG_TABLE})"
+            ).fetchall()
+        }
+        if "change_details" not in columns:
             connection.execute(
                 f"""
-                create table if not exists {PROJECT_METADATA_TABLE} (
-                    key text primary key,
-                    value text not null
-                )
+                alter table {OPERATION_LOG_TABLE}
+                add column change_details text not null default ''
                 """
             )
-        if current_version < 3:
-            connection.execute(
-                f"""
-                create table if not exists {OPERATION_LOG_TABLE} (
-                    id integer primary key autoincrement,
-                    timestamp text not null,
-                    level text not null,
-                    action text not null,
-                    message text not null,
-                    details text not null default '',
-                    change_details text not null default ''
-                )
-                """
-            )
-            connection.execute(
-                f"""
-                create index if not exists idx_{OPERATION_LOG_TABLE}_timestamp
-                on {OPERATION_LOG_TABLE} (timestamp desc, id desc)
-                """
-            )
-        if current_version < 4:
-            columns = {
-                row[1]
-                for row in connection.execute(
-                    f"pragma table_info({OPERATION_LOG_TABLE})"
-                ).fetchall()
-            }
-            if "change_details" not in columns:
-                connection.execute(
-                    f"""
-                    alter table {OPERATION_LOG_TABLE}
-                    add column change_details text not null default ''
-                    """
-                )
+        connection.execute(
+            f"""
+            create index if not exists idx_{OPERATION_LOG_TABLE}_timestamp
+            on {OPERATION_LOG_TABLE} (timestamp desc, id desc)
+            """
+        )
         connection.execute(f"pragma user_version = {DATABASE_SCHEMA_VERSION}")
 
 
@@ -442,9 +442,10 @@ def connect() -> Iterator[sqlite3.Connection]:
     - 最后总会关闭连接
     """
     database_path = ensure_database()
-    connection = sqlite3.connect(database_path)
+    connection = sqlite3.connect(database_path, timeout=15)
     connection.row_factory = sqlite3.Row
     try:
+        connection.execute("pragma busy_timeout = 15000")
         yield connection
         connection.commit()
     except Exception:
